@@ -118,10 +118,23 @@ def test_rejects_infinite_while(config: ProjectConfig) -> None:
     assert not any(issue.rule == "infinite_loop" for issue in report.issues)
 
 
-def test_duration_limit(config: ProjectConfig) -> None:
+def test_long_scene_is_not_an_error(config: ProjectConfig) -> None:
     report = lint_scene(scene('text = m.Typst("x")\nself.wait(50)'), config)
-    assert any(issue.rule == "duration" for issue in report.issues)
+    assert report.ok
     assert report.estimated_duration == 50
+    assert any(
+        issue.rule == "long_wait" and issue.severity == "warning" for issue in report.issues
+    )
+
+
+def test_long_run_time_warns(config: ProjectConfig) -> None:
+    report = lint_scene(
+        scene('text = m.Typst("x")\nself.play(m.Write(text), run_time=3.0)'), config
+    )
+    assert report.ok
+    assert any(
+        issue.rule == "long_run_time" and issue.severity == "warning" for issue in report.issues
+    )
 
 
 def test_safe_area_is_a_warning(config: ProjectConfig) -> None:

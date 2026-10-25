@@ -219,19 +219,32 @@ def _parse_plan(raw: str, *, strict: bool) -> ScenePlan | None:
         return None
 
 
+def _rendered_seconds(artifacts: dict[str, Any]) -> float | None:
+    """Read a scene's measured duration from its newest render report."""
+    for key in ("final", "final_batch", "preview", "preview_batch"):
+        report = artifacts.get(key)
+        if isinstance(report, dict):
+            value = report.get("duration_seconds")
+            if isinstance(value, (int, float)):
+                return round(float(value), 3)
+    return None
+
+
 def _scene_summary(row: sqlite3.Row) -> SceneSummary:
     plan = _parse_plan(row["plan_json"], strict=False)
     code = row["code"]
+    artifacts = _parse_artifacts(row["artifacts_json"])
     return SceneSummary(
         project_id=row["project_id"],
         scene_id=row["scene_id"],
         title=row["title"],
         status=row["status"],
         target_seconds=plan.target_seconds if plan else None,
+        rendered_seconds=_rendered_seconds(artifacts),
         code_hash=row["code_hash"],
         code_lines=None if code is None else len(code.splitlines()),
         rejection_reason=row["rejection_reason"],
-        artifacts=_parse_artifacts(row["artifacts_json"]),
+        artifacts=artifacts,
         updated_at=row["updated_at"],
     )
 
@@ -323,7 +336,7 @@ def save_storyboard(project_id: str, storyboard: Storyboard) -> Storyboard:
             project_id,
             None,
             "storyboard_saved",
-            {"clip_count": len(storyboard.clips), "total_seconds": storyboard.total_seconds},
+            {"clip_count": len(storyboard.clips)},
             now,
         )
     return storyboard

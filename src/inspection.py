@@ -173,7 +173,9 @@ def _offset_issues(issues: list[LayoutIssue], scene_id: str) -> list[LayoutIssue
     return shifted
 
 
-def _framed_copy(project_id: str, base: Path, scene_id: str, width: int, height: int) -> Path | None:
+def _framed_copy(
+    project_id: str, base: Path, scene_id: str, width: int, height: int
+) -> Path | None:
     """Write ``logs/inspect-<scene>.py`` with the project's frame size set."""
     source = scene_file(project_id, scene_id)
     try:
