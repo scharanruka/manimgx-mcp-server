@@ -9,6 +9,12 @@ from typing import Any, Final
 PROJECTS_HOME_ENV: Final = "MANIM_MCP_HOME"
 DEFAULT_PROJECTS_HOME: Final = Path("~/.manimgx-mcp/projects")
 
+EXPORTS_HOME_ENV: Final = "MANIM_MCP_EXPORT_HOME"
+DEFAULT_EXPORTS_HOME: Final = Path("~/.manimgx-mcp/exports")
+EXPORT_TTL_DAYS_ENV: Final = "MANIM_MCP_EXPORT_TTL_DAYS"
+DEFAULT_EXPORT_TTL_DAYS: Final = 7
+SESSION_ID_ENV: Final = "MANIM_MCP_SESSION_ID"
+
 PROJECT_STATUSES: Final = (
     "planned",
     "code_written",
@@ -66,6 +72,24 @@ def projects_home() -> Path:
     raw = os.environ.get(PROJECTS_HOME_ENV)
     path = Path(raw) if raw else DEFAULT_PROJECTS_HOME
     return path.expanduser().resolve(strict=False)
+
+
+def exports_home() -> Path:
+    """Return the configured export home for finished bundles."""
+    raw = os.environ.get(EXPORTS_HOME_ENV)
+    path = Path(raw) if raw else DEFAULT_EXPORTS_HOME
+    return path.expanduser().resolve(strict=False)
+
+
+def export_ttl_days() -> int:
+    """Return how long finished exports are kept on disk."""
+    raw = os.environ.get(EXPORT_TTL_DAYS_ENV)
+    if not raw:
+        return DEFAULT_EXPORT_TTL_DAYS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_EXPORT_TTL_DAYS
 
 
 def default_config(aspect_ratio: str = "9:16") -> dict[str, Any]:

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 import unicodedata
 import uuid
 from pathlib import Path
 
-from config import projects_home
+from config import exports_home, projects_home
 from models import ProjectPaths
 
 
@@ -145,6 +147,32 @@ def export_file(project_id: str, output_name: str) -> Path:
     if not _EXPORT_NAME_RE.fullmatch(name):
         raise PathSecurityError(f"invalid export name: {output_name!r}")
     return Path(project_paths(project_id).exports_dir) / name
+
+
+def persistent_export_dir(project_id: str) -> Path:
+    """Return the durable export directory for a project's finished bundle."""
+    validate_project_id(project_id)
+    root = exports_home()
+    candidate = root / project_id
+    resolved = candidate.resolve(strict=False)
+    if resolved.parent != root.resolve(strict=False):
+        raise PathSecurityError(f"export path escapes the export home: {project_id!r}")
+    return candidate
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write a file atomically, creating its parent directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def resolve_project_path(project_id: str, path_value: str) -> Path:
