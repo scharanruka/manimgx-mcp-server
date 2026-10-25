@@ -164,9 +164,7 @@ def _offset_issues(issues: list[LayoutIssue], scene_id: str) -> list[LayoutIssue
             issue.model_copy(
                 update={
                     "line": line,
-                    "message": issue.message.replace(
-                        f"inspect-{scene_id}.py", f"{scene_id}.py"
-                    ),
+                    "message": issue.message.replace(f"inspect-{scene_id}.py", f"{scene_id}.py"),
                 }
             )
         )

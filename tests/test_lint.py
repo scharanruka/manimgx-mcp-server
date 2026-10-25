@@ -122,9 +122,7 @@ def test_long_scene_is_not_an_error(config: ProjectConfig) -> None:
     report = lint_scene(scene('text = m.Typst("x")\nself.wait(50)'), config)
     assert report.ok
     assert report.estimated_duration == 50
-    assert any(
-        issue.rule == "long_wait" and issue.severity == "warning" for issue in report.issues
-    )
+    assert any(issue.rule == "long_wait" and issue.severity == "warning" for issue in report.issues)
 
 
 def test_long_run_time_warns(config: ProjectConfig) -> None:

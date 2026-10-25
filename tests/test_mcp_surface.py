@@ -40,9 +40,7 @@ def project(projects_home: Path):
                     {
                         "scene_id": "scene_01",
                         "title": "Surface clip",
-                        "beats": [
-                            {"action": "write the word Resource", "objects": ["text"]}
-                        ],
+                        "beats": [{"action": "write the word Resource", "objects": ["text"]}],
                         "key_objects": ["text"],
                         "typst_expressions": ["Resource"],
                     }

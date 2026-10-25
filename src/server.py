@@ -195,8 +195,7 @@ async def project_start(
                     "start": ElicitRequest(
                         params=ElicitRequestFormParams(
                             message=(
-                                "Which aspect ratio and how many clips should this "
-                                "animation have?"
+                                "Which aspect ratio and how many clips should this animation have?"
                             ),
                             requestedSchema=_missing_schema(aspect_missing, clip_missing),
                         )
@@ -434,9 +433,7 @@ def project_build(
     force: bool = False,
 ) -> BuildResult:
     """Build scenes, stitch the video, and return clips plus code.py."""
-    report = build_project(
-        project_id, code=code, review=review, inspect=inspect, force=force
-    )
+    report = build_project(project_id, code=code, review=review, inspect=inspect, force=force)
     logger.info(
         "build %s: %s in %.2fs",
         project_id,

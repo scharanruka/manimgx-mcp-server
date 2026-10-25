@@ -34,9 +34,7 @@ async def test_start_asks_for_missing_parameters(homes: tuple[Path, Path]) -> No
 
 @pytest.mark.asyncio
 async def test_start_creates_project_when_parameters_given(homes: tuple[Path, Path]) -> None:
-    result = await project_start(
-        "explain matrix rank", aspect_ratio="9:16", clip_count=3, ctx=None
-    )
+    result = await project_start("explain matrix rank", aspect_ratio="9:16", clip_count=3, ctx=None)
 
     assert result.status == "started"
     assert result.project is not None

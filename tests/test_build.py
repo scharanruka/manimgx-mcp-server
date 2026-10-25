@@ -8,7 +8,7 @@ from builder import split_scenes
 from models import Storyboard
 from server import project_build, project_create, project_export, storyboard_save
 
-CODE = '''import manimgx as m
+CODE = """import manimgx as m
 
 
 # manimgx: scene_id=scene_01
@@ -25,7 +25,7 @@ class Scene02(m.Scene):
         text = m.Typst("Two")
         self.play(m.Write(text), run_time=0.3)
         self.wait(0.2)
-'''
+"""
 
 
 @pytest.fixture
