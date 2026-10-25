@@ -1,0 +1,48 @@
+[project]
+name = "manimgx-mcp-server"
+version = "0.1.0"
+description = "Blazing-fast ManimGX MCP server for short technical animation clips"
+readme = "README.md"
+requires-python = ">=3.13,<3.15"
+license = { text = "MIT" }
+authors = [
+    { name = "scharanruka", email = "saicharanruka@gmail.com" }
+]
+dependencies = [
+    "fastmcp>=3.0",
+    "manimgx>=0.1.1",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+manimgx-mcp = "manimgx_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/manimgx_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "slow: long-running tests",
+    "gpu: tests that need a working ManimGX GPU/software renderer",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["PLAN.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

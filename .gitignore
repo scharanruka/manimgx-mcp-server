@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# ManimGX render artifacts
+examples/scenes/*.mp4
+examples/scenes/*.srt
+examples/scenes/*.png
+
+# Local project data
+.manimgx-mcp/
