@@ -332,6 +332,7 @@ def build_project(
 ) -> BuildResult:
     """Split, lint, render and assemble a project, returning the bundle."""
     started = time.perf_counter()
+    db.touch_project(project_id)
     config = db.get_project_config(project_id)
     order = [scene.scene_id for scene in db.list_scene_summaries(project_id)]
     if not order:
@@ -617,6 +618,7 @@ def build_project(
 def export_existing(project_id: str) -> BuildResult:
     """Return the current bundle, stitching it again when the file is missing."""
     started = time.perf_counter()
+    db.touch_project(project_id)
     config = db.get_project_config(project_id)
     order = [scene.scene_id for scene in db.list_scene_summaries(project_id)]
     if not order:

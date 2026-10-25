@@ -62,6 +62,18 @@ def projects_root() -> Path:
     return projects_home()
 
 
+def list_project_ids() -> list[str]:
+    """Return the ids of every project directory, newest name order."""
+    root = projects_root()
+    if not root.is_dir():
+        return []
+    return sorted(
+        entry.name
+        for entry in root.iterdir()
+        if entry.is_dir() and _PROJECT_ID_RE.fullmatch(entry.name)
+    )
+
+
 def project_dir(project_id: str) -> Path:
     """Resolve a project directory, rejecting traversal and symlink escapes."""
     validate_project_id(project_id)

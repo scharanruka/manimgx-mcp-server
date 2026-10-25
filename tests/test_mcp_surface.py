@@ -171,3 +171,14 @@ async def test_scene_prompt_uses_beats_not_seconds(project) -> None:
     assert "Do not add self.wait() longer than 1 second" in prompt
     assert "45 seconds" not in prompt
     assert "target_seconds" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_start_tool_is_registered() -> None:
+    async with Client(mcp) as client:
+        tools = {tool.name: tool for tool in await client.list_tools()}
+
+    assert "project_start" in tools
+    schema = tools["project_start"].input_schema["properties"]
+    assert {"brief", "aspect_ratio", "clip_count", "style", "theme"} <= set(schema)
+    assert "ctx" not in schema

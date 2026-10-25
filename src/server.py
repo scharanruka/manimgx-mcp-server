@@ -7,19 +7,25 @@ import logging
 import math
 import shutil
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
+from mcp_types import ElicitRequest, ElicitRequestFormParams, InputRequiredResult
 
+import cleanup
 import db
 import post
 from builder import build_project, export_existing
 from inspection import run_inspect
 from lint import find_scene_class_name, lint_scene
 from models import (
+    AspectChoice,
     BatchReport,
     BuildResult,
+    ClipCountChoice,
     ExportReport,
     FrameReport,
     InspectReport,
@@ -32,6 +38,8 @@ from models import (
     RenderReport,
     SceneDetail,
     SceneSummary,
+    StartRequest,
+    StartResult,
     Storyboard,
     apply_theme,
 )
@@ -57,22 +65,41 @@ from render import run_preview
 
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def _lifespan(_app: Any) -> AsyncIterator[dict[str, Any]]:
+    """Sweep stale state on start and remove this session on disconnect."""
+    owner = cleanup.session_id()
+    cleanup.sweep_orphans()
+    cleanup.sweep_exports()
+    logger.info("session %s started", owner)
+    try:
+        yield {"session_id": owner}
+    finally:
+        removed = cleanup.cleanup_session(owner)
+        logger.info("session %s closed; removed %d ephemeral project(s)", owner, len(removed))
+
+
 mcp = FastMCP(
     name="manimgx",
     instructions=(
         "Generate short technical animation clips with ManimGX. "
         "Use Typst for all typesetting; never use LaTeX or ManimCE."
     ),
+    lifespan=_lifespan,
 )
 
 
-@mcp.tool
-def project_create(
+def _create_project(
     name: str,
     aspect_ratio: Literal["9:16", "16:9"] = "9:16",
     theme: dict[str, Any] | None = None,
+    *,
+    brief: str | None = None,
+    clip_count: int | None = None,
+    ephemeral: bool = False,
 ) -> ProjectSummary:
-    """Create an animation project and return its paths and config."""
+    """Create a project directory and its database row."""
     clean_name = name.strip()
     if not clean_name:
         raise ValueError("project name must not be empty")
@@ -93,13 +120,132 @@ def project_create(
         raise RuntimeError("could not allocate a unique project id")
 
     try:
-        db.create_project_record(project_id, clean_name, config)
+        db.create_project_record(
+            project_id,
+            clean_name,
+            config,
+            brief=brief,
+            clip_count=clip_count,
+            session_id=cleanup.session_id() if ephemeral else None,
+            ephemeral=ephemeral,
+        )
     except BaseException:
         shutil.rmtree(project_dir(project_id), ignore_errors=True)
         raise
 
     logger.info("created project %s", project_id)
     return db.get_project_summary(project_id)
+
+
+@mcp.tool
+def project_create(
+    name: str,
+    aspect_ratio: Literal["9:16", "16:9"] = "9:16",
+    theme: dict[str, Any] | None = None,
+) -> ProjectSummary:
+    """Create an animation project and return its paths and config."""
+    return _create_project(name, aspect_ratio, theme)
+
+
+def _missing_schema(aspect_missing: bool, clip_missing: bool) -> dict[str, Any]:
+    """Return the elicitation schema for whichever start parameters are missing."""
+    if aspect_missing and clip_missing:
+        return StartRequest.model_json_schema()
+    if aspect_missing:
+        return AspectChoice.model_json_schema()
+    return ClipCountChoice.model_json_schema()
+
+
+@mcp.tool
+async def project_start(
+    brief: str,
+    aspect_ratio: Literal["9:16", "16:9"] | None = None,
+    clip_count: int | None = None,
+    style: str = "technical",
+    theme: dict[str, Any] | None = None,
+    ctx: Context = None,  # type: ignore[assignment]
+) -> StartResult | InputRequiredResult:
+    """Start a project, asking the user for any missing format parameters."""
+    clean_brief = brief.strip()
+    if not clean_brief:
+        raise ValueError("brief must not be empty")
+    if clip_count is not None and not 1 <= clip_count <= 12:
+        raise ValueError("clip_count must be between 1 and 12")
+
+    responses = ctx.input_responses if ctx is not None else None
+    answered = False
+    if responses and "start" in responses:
+        answered = True
+        payload = getattr(responses["start"], "content", None) or {}
+        choice = payload.get("aspect_ratio")
+        if choice in {"9:16", "16:9"}:
+            aspect_ratio = choice
+        count = payload.get("clip_count")
+        if isinstance(count, int) and 1 <= count <= 12:
+            clip_count = count
+        elif isinstance(count, str) and count.isdigit() and 1 <= int(count) <= 12:
+            clip_count = int(count)
+
+    aspect_missing = aspect_ratio is None
+    clip_missing = clip_count is None
+    if aspect_missing or clip_missing:
+        if ctx is not None and not answered:
+            return InputRequiredResult(
+                input_requests={
+                    "start": ElicitRequest(
+                        params=ElicitRequestFormParams(
+                            message=(
+                                "Which aspect ratio and how many clips should this "
+                                "animation have?"
+                            ),
+                            requestedSchema=_missing_schema(aspect_missing, clip_missing),
+                        )
+                    )
+                },
+                request_state="{}",
+            )
+        return StartResult(
+            status="needs_input",
+            brief=clean_brief,
+            clip_count=clip_count,
+            missing=[
+                name
+                for name, missing in (
+                    ("aspect_ratio", aspect_missing),
+                    ("clip_count", clip_missing),
+                )
+                if missing
+            ],
+            defaults={
+                "aspect_ratio": aspect_ratio or "9:16",
+                "clip_count": clip_count or 3,
+            },
+            question="Which aspect ratio and how many clips should this animation have?",
+            next="call project_start again with aspect_ratio and clip_count",
+        )
+
+    project = _create_project(
+        clean_brief[:80],
+        aspect_ratio,
+        theme,
+        brief=clean_brief,
+        clip_count=clip_count,
+        ephemeral=True,
+    )
+    plan_prompt = build_storyboard_plan_prompt(
+        project.project_id, clean_brief, clip_count, style=style
+    )
+    return StartResult(
+        status="started",
+        brief=clean_brief,
+        project=project,
+        clip_count=clip_count,
+        plan_prompt=plan_prompt,
+        next=(
+            "save the plan with storyboard_save, write the scene code, then call "
+            "project_build(project_id, code=...) for the video and code.py"
+        ),
+    )
 
 
 @mcp.tool

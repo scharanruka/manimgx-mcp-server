@@ -429,9 +429,21 @@ class BuildResult(BaseModel):
 
 
 class StartRequest(BaseModel):
-    """Parameters the server asks for when a start request omits them."""
+    """Parameters the server asks for when a start request omits both."""
 
     aspect_ratio: Literal["9:16", "16:9"]
+    clip_count: int = Field(ge=1, le=12)
+
+
+class AspectChoice(BaseModel):
+    """The aspect ratio alone, when only that is missing."""
+
+    aspect_ratio: Literal["9:16", "16:9"]
+
+
+class ClipCountChoice(BaseModel):
+    """The clip count alone, when only that is missing."""
+
     clip_count: int = Field(ge=1, le=12)
 
 
