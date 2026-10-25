@@ -16,4 +16,4 @@
 
 ## Current milestone
 
-Milestone 5 — batch rendering and final output. See `PLAN.md` for the full spec.
+Milestone 6 — review loop and post-processing. See `PLAN.md` for the full spec.

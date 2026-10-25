@@ -25,6 +25,7 @@ class SceneNotFoundError(FileNotFoundError):
 
 _PROJECT_ID_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?-[0-9a-f]{6}")
 _SCENE_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+_EXPORT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,120}\.mp4")
 
 
 def slugify(name: str) -> str:
@@ -136,6 +137,16 @@ def scene_file(project_id: str, scene_id: str) -> Path:
     return path
 
 
+def export_file(project_id: str, output_name: str) -> Path:
+    """Resolve a safe MP4 export path inside the project's exports directory."""
+    name = output_name.strip()
+    if not name.lower().endswith(".mp4"):
+        name = f"{name}.mp4"
+    if not _EXPORT_NAME_RE.fullmatch(name):
+        raise PathSecurityError(f"invalid export name: {output_name!r}")
+    return Path(project_paths(project_id).exports_dir) / name
+
+
 def resolve_project_path(project_id: str, path_value: str) -> Path:
     """Resolve a path inside a project, rejecting absolute or escaping paths."""
     base = project_dir(project_id).resolve(strict=False)
@@ -151,7 +162,15 @@ def _artifact_values(value: object) -> list[str]:
     if isinstance(value, str):
         return [value]
     if isinstance(value, dict):
-        skip = {"lint", "inspect", "preview", "final"}
+        skip = {
+            "lint",
+            "inspect",
+            "preview",
+            "final",
+            "preview_batch",
+            "final_batch",
+            "frame_report",
+        }
         return [
             item
             for key, nested in value.items()

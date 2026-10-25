@@ -21,6 +21,8 @@ approves clips for final 1080p rendering.
   15 fps.
 - Milestone 5 complete: single-process batch preview rendering and final
   1080×1920, 60 fps output.
+- Milestone 6 complete: review rejection loop, stitching, frame extraction, mpv
+  preview, and the scene edit prompt.
 
 ## Requirements
 
@@ -124,6 +126,10 @@ and traversal or symlink escapes are rejected.
 | `scene_render_preview` | Render a 480p15 preview and return its report. |
 | `project_render_batch` | Render many preview or final clips in one worker. |
 | `scene_render_final` | Render a 1080p60 final; requires approval or `force`. |
+| `scene_review` | Approve or reject a previewed scene with a reason. |
+| `project_stitch` | Concatenate final clips into one exported MP4. |
+| `scene_extract_frames` | Extract PNG review frames at requested times. |
+| `scene_open_mpv` | Open a preview or final video in detached mpv. |
 
 `project_update_theme` accepts only these keys:
 
@@ -196,6 +202,28 @@ Run the benchmark directly with:
 ```bash
 uv run pytest tests/bench_batch.py -q -s
 ```
+
+## Review and post-processing
+
+```text
+preview_rendered ──> scene_review(approve) ──> approved ──> scene_render_final
+                 └─> scene_review(reject, reason) ──> rejected
+                                                     └─> scene_edit_prompt
+```
+
+- `scene_review` is the only way scenes become `approved` or `rejected`.
+- Rejections require a reason, stored on the scene and included in
+  `scene_edit_prompt`.
+- `project_stitch` concatenates final renders in storyboard order into
+  `exports/<name>.mp4`, using stream copy and falling back to H.264 re-encoding.
+- `scene_extract_frames` writes PNGs to `frames/<scene_id>/`, preferring the final
+  video when one exists.
+- `scene_open_mpv` starts a detached, looping mpv window; it returns a clear error
+  when mpv is unavailable.
+
+The MCP server also exposes the `scene_edit_prompt` prompt. It sends the scene
+plan, config, current code (or an AST skeleton over 80 lines), lint issues,
+inspect issues, and the rejection reason—not the chat history.
 
 ## Project layout
 

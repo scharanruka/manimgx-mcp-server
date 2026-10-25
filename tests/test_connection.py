@@ -26,6 +26,9 @@ async def test_stdio_connection(tmp_path: Path) -> None:
         assert "project_create" in tools
         assert "scene_render_preview" in tools
 
+        prompts = {prompt.name for prompt in await client.list_prompts()}
+        assert "scene_edit_prompt" in prompts
+
         created = await client.call_tool("project_create", {"name": "Connection Test"})
         assert not created.is_error
         project_id = created.structured_content["project_id"]

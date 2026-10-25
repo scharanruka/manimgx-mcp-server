@@ -327,6 +327,41 @@ class BatchReport(BaseModel):
     stderr: str = ""
 
 
+class ExportReport(BaseModel):
+    """Result of stitching final clips into one MP4."""
+
+    ok: bool
+    export_path: str | None = None
+    scene_ids: list[str] = Field(default_factory=list)
+    duration_seconds: float | None = None
+    size_bytes: int | None = None
+    reencoded: bool = False
+    error: str | None = None
+    stdout: str = ""
+    stderr: str = ""
+
+
+class FrameReport(BaseModel):
+    """Result of extracting review frames from a rendered scene."""
+
+    ok: bool
+    frame_paths: list[str] = Field(default_factory=list)
+    times: list[float] = Field(default_factory=list)
+    source_video: str | None = None
+    errors: list[str] = Field(default_factory=list)
+    stdout: str = ""
+    stderr: str = ""
+
+
+class MpvReport(BaseModel):
+    """Result of opening a rendered scene in mpv."""
+
+    ok: bool
+    pid: int | None = None
+    video_path: str | None = None
+    error: str | None = None
+
+
 class ProjectSummary(BaseModel):
     """Project config, paths, storyboard, scenes, and status counts."""
 

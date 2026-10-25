@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 import shutil
 import sys
@@ -14,16 +15,20 @@ from typing import Any, Literal
 from fastmcp import FastMCP
 
 import db
+import post
 from config import BATCH_BUDGET_SECONDS
 from inspection import run_inspect
 from lint import find_scene_class_name, lint_scene
 from models import (
     BatchReport,
     BatchSceneResult,
+    ExportReport,
+    FrameReport,
     InspectReport,
     LayoutIssue,
     LintIssue,
     LintReport,
+    MpvReport,
     ProjectConfig,
     ProjectSummary,
     RenderReport,
@@ -36,11 +41,14 @@ from paths import (
     PathSecurityError,
     create_project_dir,
     delete_artifact_files,
+    export_file,
     new_project_id,
     project_dir,
+    project_paths,
     resolve_project_path,
     scene_file,
 )
+from prompts import build_scene_edit_prompt
 from render import run_preview, run_worker
 
 logger = logging.getLogger(__name__)
@@ -455,6 +463,178 @@ def scene_render_final(project_id: str, scene_id: str, force: bool = False) -> R
         stdout=batch.stdout,
         stderr=result.error or batch.stderr,
     )
+
+
+@mcp.tool
+def scene_review(
+    project_id: str,
+    scene_id: str,
+    decision: Literal["approve", "reject"],
+    reason: str | None = None,
+) -> SceneSummary:
+    """Approve or reject a previewed scene."""
+    if decision not in {"approve", "reject"}:
+        raise ValueError(f"invalid review decision: {decision}")
+    summary = db.get_scene_summary(project_id, scene_id)
+    if decision == "approve":
+        if summary.status not in {"inspected", "preview_rendered"}:
+            raise ValueError(
+                f"scene status {summary.status!r} cannot be approved; inspect or preview first"
+            )
+        result = db.review_scene(project_id, scene_id, "approved")
+        logger.info("approved %s for %s", scene_id, project_id)
+        return result
+
+    rejection = (reason or "").strip()
+    if not rejection:
+        raise ValueError("reject requires a reason")
+    if len(rejection) > 2000:
+        raise ValueError("rejection reason must be at most 2000 characters")
+    if summary.status not in {"inspected", "preview_rendered", "approved"}:
+        raise ValueError(f"scene status {summary.status!r} cannot be rejected")
+    result = db.review_scene(project_id, scene_id, "rejected", rejection)
+    logger.info("rejected %s for %s", scene_id, project_id)
+    return result
+
+
+def _artifact_video(
+    project_id: str, detail: SceneDetail, mode: Literal["preview", "final"]
+) -> Path | None:
+    key = "final_video" if mode == "final" else "preview_video"
+    value = detail.artifacts.get(key)
+    if not isinstance(value, str):
+        return None
+    try:
+        path = resolve_project_path(project_id, value)
+    except (PathSecurityError, ValueError) as exc:
+        logger.warning("unsafe artifact path for %s: %s", detail.scene_id, exc)
+        return None
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    return path
+
+
+@mcp.tool
+def project_stitch(
+    project_id: str,
+    output_name: str = "final.mp4",
+    scene_ids: list[str] | None = None,
+) -> ExportReport:
+    """Stitch final-rendered clips into one MP4."""
+    output = export_file(project_id, output_name)
+
+    if scene_ids is None:
+        ids = [
+            scene.scene_id
+            for scene in db.list_scene_summaries(project_id)
+            if scene.status == "final_rendered" and scene.artifacts.get("final_video")
+        ]
+    else:
+        ids = list(scene_ids)
+        if not ids:
+            raise ValueError("scene_ids must not be empty")
+        if len(ids) != len(set(ids)):
+            raise ValueError("scene_ids must not contain duplicates")
+
+    if not ids:
+        return ExportReport(
+            ok=False,
+            scene_ids=[],
+            error="no final-rendered scenes to stitch",
+        )
+
+    videos: list[Path] = []
+    missing: list[str] = []
+    for scene_id in ids:
+        detail = db.get_scene_detail(project_id, scene_id)
+        video = _artifact_video(project_id, detail, "final")
+        if video is None:
+            missing.append(scene_id)
+        else:
+            videos.append(video)
+
+    if missing:
+        return ExportReport(
+            ok=False,
+            scene_ids=ids,
+            error=f"final video missing for: {', '.join(missing)}",
+        )
+
+    report = post.stitch(
+        videos,
+        ids,
+        output,
+        Path(project_paths(project_id).logs_dir),
+    )
+    if report.ok:
+        db.record_event(
+            project_id,
+            "project_stitched",
+            {
+                "export_path": report.export_path,
+                "scene_ids": report.scene_ids,
+                "duration_seconds": report.duration_seconds,
+                "reencoded": report.reencoded,
+            },
+        )
+        logger.info("stitched %d clips to %s", len(ids), report.export_path)
+    return report
+
+
+@mcp.tool
+def scene_extract_frames(project_id: str, scene_id: str, times: list[float]) -> FrameReport:
+    """Extract PNG review frames at requested times."""
+    if not times:
+        raise ValueError("times must not be empty")
+    for moment in times:
+        if not math.isfinite(moment) or moment < 0:
+            raise ValueError("times must be finite non-negative numbers")
+
+    detail = db.get_scene_detail(project_id, scene_id)
+    video = _artifact_video(project_id, detail, "final")
+    if video is None:
+        video = _artifact_video(project_id, detail, "preview")
+    if video is None:
+        return FrameReport(
+            ok=False,
+            times=list(times),
+            errors=["no preview or final video; render the scene first"],
+        )
+
+    output_dir = Path(project_paths(project_id).frames_dir) / scene_id
+    report = post.extract_frames(video, output_dir, list(times))
+    if report.frame_paths:
+        db.record_frames_result(project_id, scene_id, report)
+    return report
+
+
+@mcp.tool
+def scene_open_mpv(
+    project_id: str,
+    scene_id: str,
+    mode: Literal["preview", "final"] = "preview",
+) -> MpvReport:
+    """Open a rendered scene in a detached mpv window."""
+    if mode not in {"preview", "final"}:
+        raise ValueError(f"invalid video mode: {mode}")
+    detail = db.get_scene_detail(project_id, scene_id)
+    video = _artifact_video(project_id, detail, mode)
+    if video is None:
+        return MpvReport(
+            ok=False,
+            error=f"no {mode} video is recorded for this scene",
+        )
+    return post.open_mpv(video)
+
+
+@mcp.prompt
+def scene_edit_prompt(
+    project_id: str,
+    scene_id: str,
+    rejection_reason: str | None = None,
+) -> str:
+    """Build a compact scene repair prompt without chat history."""
+    return build_scene_edit_prompt(project_id, scene_id, rejection_reason)
 
 
 def main() -> None:

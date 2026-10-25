@@ -13,6 +13,7 @@ from typing import Any
 from config import PROJECT_STATUSES
 from models import (
     BatchSceneResult,
+    FrameReport,
     InspectReport,
     LintReport,
     ProjectConfig,
@@ -538,6 +539,53 @@ def record_batch_scene_result(
             "duration_seconds": result.duration_seconds,
             "video_path": result.video_path,
             "batch": True,
+        },
+    )
+
+
+def review_scene(
+    project_id: str, scene_id: str, status: str, reason: str | None = None
+) -> SceneSummary:
+    """Store a bounded review decision and optional rejection reason."""
+    if status not in {"approved", "rejected"}:
+        raise ValueError(f"invalid review status: {status}")
+    now = utc_now()
+    with project_connection(project_id) as connection:
+        _scene_row(connection, project_id, scene_id)
+        connection.execute(
+            """
+            UPDATE scenes SET status = ?, rejection_reason = ?, updated_at = ?
+            WHERE project_id = ? AND scene_id = ?
+            """,
+            (status, reason, now, project_id, scene_id),
+        )
+        _insert_event(
+            connection,
+            project_id,
+            scene_id,
+            "scene_approved" if status == "approved" else "scene_rejected",
+            {"reason": reason},
+            now,
+        )
+        row = _scene_row(connection, project_id, scene_id)
+    return _scene_summary(row)
+
+
+def record_frames_result(project_id: str, scene_id: str, report: FrameReport) -> SceneSummary:
+    """Store extracted frame paths without changing scene status."""
+    return _record_scene_artifacts(
+        project_id,
+        scene_id,
+        patch={
+            "frames": report.frame_paths,
+            "frame_report": report.model_dump(mode="json"),
+        },
+        status=None,
+        event_type="frames_extracted" if report.ok else "frames_failed",
+        payload={
+            "ok": report.ok,
+            "count": len(report.frame_paths),
+            "times": report.times,
         },
     )
 

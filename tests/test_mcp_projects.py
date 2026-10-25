@@ -36,6 +36,10 @@ async def test_project_tools_are_registered_and_callable(projects_home: Path) ->
         "scene_render_preview",
         "project_render_batch",
         "scene_render_final",
+        "scene_review",
+        "project_stitch",
+        "scene_extract_frames",
+        "scene_open_mpv",
     }
 
     async with Client(mcp) as client:
@@ -155,12 +159,33 @@ async def test_scene_tools_via_mcp(projects_home: Path) -> None:
         assert not batched.is_error
         assert _payload(batched)["ok"] is True
 
+        reviewed = await client.call_tool(
+            "scene_review",
+            {"project_id": project_id, "scene_id": "scene_01", "decision": "approve"},
+        )
+        assert not reviewed.is_error
+        assert _payload(reviewed)["status"] == "approved"
+
         final = await client.call_tool(
             "scene_render_final",
-            {"project_id": project_id, "scene_id": "scene_01", "force": True},
+            {"project_id": project_id, "scene_id": "scene_01"},
         )
         assert not final.is_error
         assert _payload(final)["ok"] is True
         assert _payload(final)["width"] == 1080
         assert _payload(final)["height"] == 1920
         assert _payload(final)["fps"] == 60
+
+        stitched = await client.call_tool(
+            "project_stitch", {"project_id": project_id, "output_name": "mcp-final"}
+        )
+        assert not stitched.is_error
+        assert _payload(stitched)["ok"] is True
+        assert _payload(stitched)["export_path"].endswith("mcp-final.mp4")
+
+        frames = await client.call_tool(
+            "scene_extract_frames",
+            {"project_id": project_id, "scene_id": "scene_01", "times": [0.0]},
+        )
+        assert not frames.is_error
+        assert _payload(frames)["ok"] is True
