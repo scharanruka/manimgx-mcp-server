@@ -15,6 +15,8 @@ approves clips for final 1080p rendering.
   test, and a rendered example clip.
 - Milestone 2 complete: SQLite persistence, project paths with traversal
   protection, and `project_create`, `project_get`, `project_update_theme`.
+- Milestone 3 complete: storyboard persistence, scene storage, and deterministic
+  AST linting.
 
 ## Requirements
 
@@ -97,6 +99,11 @@ and traversal or symlink escapes are rejected.
 | `project_create` | Create a project with a 9:16 or 16:9 config. |
 | `project_get` | Read config, paths, storyboard, scenes, and status counts. |
 | `project_update_theme` | Update validated colors, fonts, safe area, and render settings. |
+| `storyboard_save` | Validate a storyboard and create its planned scenes. |
+| `scene_write` | Write scene code and clear stale artifacts on change. |
+| `scene_list` | List scenes with status and code metadata. |
+| `scene_get` | Read one scene's plan, code, and artifacts. |
+| `scene_lint` | Run deterministic AST checks without executing code. |
 
 `project_update_theme` accepts only these keys:
 
@@ -121,6 +128,25 @@ and traversal or symlink escapes are rejected.
 ```
 
 Partial updates are merged; nested `font_sizes` and `safe_area` also merge.
+
+## Scene workflow
+
+```text
+storyboard_save → scene_write → scene_lint
+                                   ├─ fail → edit code → scene_write
+                                   └─ pass → lint_passed
+```
+
+`storyboard_save` requires 1–100 clips, each 1–30 seconds, with a total of 10–90
+seconds. Scene IDs are unique slugs. `scene_write` stores the code in SQLite and
+in `scenes/<scene_id>.py`, hashes it, and resets the status to `code_written`.
+Changing the code clears previously recorded artifacts.
+
+`scene_lint` never executes scene code. It rejects forbidden imports and calls,
+missing or multiple scene classes, invalid `construct` signatures, infinite
+`while True` loops, scenes over 200 lines or 45 estimated seconds, LaTeX
+typesetting in Typst projects, and missing Typst content. Safe-area coordinate
+problems are warnings rather than failures.
 
 ## Project layout
 

@@ -2,16 +2,37 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import shutil
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any, Literal
 
 from fastmcp import FastMCP
 
 import db
-from models import ProjectConfig, ProjectSummary, apply_theme
-from paths import create_project_dir, new_project_id, project_dir
+from lint import lint_scene
+from models import (
+    LintIssue,
+    LintReport,
+    ProjectConfig,
+    ProjectSummary,
+    SceneDetail,
+    SceneSummary,
+    Storyboard,
+    apply_theme,
+)
+from paths import (
+    PathSecurityError,
+    create_project_dir,
+    delete_artifact_files,
+    new_project_id,
+    project_dir,
+    scene_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +95,92 @@ def project_update_theme(project_id: str, theme: dict[str, Any]) -> ProjectSumma
     db.update_project_config(project_id, config)
     logger.info("updated theme for project %s", project_id)
     return db.get_project_summary(project_id)
+
+
+@mcp.tool
+def storyboard_save(project_id: str, storyboard: Storyboard) -> Storyboard:
+    """Validate and persist a storyboard and its planned scenes."""
+    if storyboard.project_id != project_id:
+        raise ValueError("storyboard project_id must match the project_id argument")
+    saved = db.save_storyboard(project_id, storyboard)
+    logger.info("saved storyboard for %s (%d clips)", project_id, len(saved.clips))
+    return saved
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+@mcp.tool
+def scene_write(project_id: str, scene_id: str, code: str) -> SceneSummary:
+    """Write scene source, reset its status, and clear stale artifacts."""
+    previous = db.get_scene_row(project_id, scene_id)
+    path = scene_file(project_id, scene_id)
+    code_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+    _atomic_write_text(path, code)
+    try:
+        result = db.update_scene_code(project_id, scene_id, code, code_hash)
+    except BaseException:
+        if previous["code"] is None:
+            path.unlink(missing_ok=True)
+        else:
+            _atomic_write_text(path, previous["code"])
+        raise
+
+    if result["changed"] and result["stale_artifacts"]:
+        try:
+            delete_artifact_files(project_id, result["stale_artifacts"])
+        except (PathSecurityError, OSError) as exc:
+            logger.warning("could not clear stale artifacts for %s: %s", scene_id, exc)
+
+    logger.info("wrote scene %s for %s", scene_id, project_id)
+    return db.get_scene_summary(project_id, scene_id)
+
+
+@mcp.tool
+def scene_list(project_id: str) -> list[SceneSummary]:
+    """List scenes in storyboard order."""
+    return db.list_scene_summaries(project_id)
+
+
+@mcp.tool
+def scene_get(project_id: str, scene_id: str) -> SceneDetail:
+    """Get a scene's plan, code, status, and artifacts."""
+    return db.get_scene_detail(project_id, scene_id)
+
+
+@mcp.tool
+def scene_lint(project_id: str, scene_id: str) -> LintReport:
+    """Lint scene code without executing it."""
+    detail = db.get_scene_detail(project_id, scene_id)
+    if detail.code is None:
+        return LintReport(
+            ok=False,
+            issues=[
+                LintIssue(
+                    rule="missing_code",
+                    line=1,
+                    message="scene has no code yet",
+                    fix="call scene_write before scene_lint",
+                )
+            ],
+        )
+
+    report = lint_scene(detail.code, db.get_project_config(project_id))
+    db.record_lint_result(project_id, scene_id, report)
+    logger.info("lint %s for %s", "passed" if report.ok else "failed", scene_id)
+    return report
 
 
 def main() -> None:

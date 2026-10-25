@@ -1,5 +1,3 @@
-"""Pydantic models shared by the MCP tools and persistence layer."""
-
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -178,6 +176,50 @@ class ProjectPaths(BaseModel):
     logs_dir: str
 
 
+class ScenePlan(BaseModel):
+    """One clip in a storyboard."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: str
+    title: str = Field(min_length=1)
+    target_seconds: float = Field(ge=1, le=30)
+    visual: str = Field(min_length=1)
+    key_objects: list[str]
+    animation_notes: str = Field(min_length=1)
+    typst_expressions: list[str] = Field(default_factory=list)
+
+    @field_validator("scene_id")
+    @classmethod
+    def _check_scene_id(cls, value: str) -> str:
+        from paths import validate_scene_id
+
+        return validate_scene_id(value)
+
+
+class Storyboard(BaseModel):
+    """Validated storyboard produced by the host LLM."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    clips: list[ScenePlan] = Field(min_length=1, max_length=100)
+    total_seconds: float = Field(ge=10, le=90)
+
+    @model_validator(mode="after")
+    def _validate_clips(self) -> Storyboard:
+        scene_ids = [clip.scene_id for clip in self.clips]
+        if len(scene_ids) != len(set(scene_ids)):
+            raise ValueError("scene_id values must be unique within a storyboard")
+        clip_total = sum(clip.target_seconds for clip in self.clips)
+        if abs(clip_total - self.total_seconds) > 0.05:
+            raise ValueError(
+                f"total_seconds ({self.total_seconds}) must match the sum of "
+                f"clip target_seconds ({clip_total})"
+            )
+        return self
+
+
 class SceneSummary(BaseModel):
     """Compact scene metadata for project listings."""
 
@@ -185,10 +227,40 @@ class SceneSummary(BaseModel):
     scene_id: str
     title: str
     status: str
+    target_seconds: float | None = None
     code_hash: str | None = None
+    code_lines: int | None = None
     rejection_reason: str | None = None
     artifacts: dict[str, Any] = Field(default_factory=dict)
     updated_at: str
+
+
+class SceneDetail(SceneSummary):
+    """A scene with its full plan, source code, and code path."""
+
+    plan: ScenePlan
+    code: str | None = None
+    code_path: str
+
+
+class LintIssue(BaseModel):
+    """One deterministic lint or layout warning."""
+
+    rule: str
+    line: int | None = Field(default=None, ge=1)
+    message: str
+    fix: str
+    severity: Literal["error", "warning"] = "error"
+
+
+class LintReport(BaseModel):
+    """Compact scene lint result."""
+
+    ok: bool
+    issues: list[LintIssue] = Field(default_factory=list)
+    truncated: bool = False
+    estimated_duration: float | None = None
+    class_name: str | None = None
 
 
 class ProjectSummary(BaseModel):
@@ -198,7 +270,7 @@ class ProjectSummary(BaseModel):
     name: str
     config: ProjectConfig
     paths: ProjectPaths
-    storyboard: dict[str, Any] | None = None
+    storyboard: Storyboard | None = None
     scenes: list[SceneSummary] = Field(default_factory=list)
     scene_count: int = 0
     status_counts: dict[str, int] = Field(default_factory=dict)

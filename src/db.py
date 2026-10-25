@@ -11,11 +11,22 @@ from pathlib import Path
 from typing import Any
 
 from config import PROJECT_STATUSES
-from models import ProjectConfig, ProjectSummary, SceneSummary
+from models import (
+    LintReport,
+    ProjectConfig,
+    ProjectSummary,
+    SceneDetail,
+    ScenePlan,
+    SceneSummary,
+    Storyboard,
+)
 from paths import (
     ProjectNotFoundError,
+    SceneNotFoundError,
     project_dir,
     project_paths,
+    scene_file,
+    validate_scene_id,
 )
 
 SCHEMA = """
@@ -187,21 +198,201 @@ def get_project_row(project_id: str) -> dict[str, Any]:
     return dict(row)
 
 
-def _scene_summary(row: sqlite3.Row) -> SceneSummary:
+def _parse_artifacts(raw: str | None) -> dict[str, Any]:
     try:
-        artifacts = json.loads(row["artifacts_json"] or "{}")
+        value = json.loads(raw or "{}")
     except json.JSONDecodeError:
-        artifacts = {}
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _parse_plan(raw: str, *, strict: bool) -> ScenePlan | None:
+    try:
+        return ScenePlan.model_validate_json(raw)
+    except ValueError as exc:
+        if strict:
+            raise ValueError("scene plan is corrupt") from exc
+        return None
+
+
+def _scene_summary(row: sqlite3.Row) -> SceneSummary:
+    plan = _parse_plan(row["plan_json"], strict=False)
+    code = row["code"]
     return SceneSummary(
         project_id=row["project_id"],
         scene_id=row["scene_id"],
         title=row["title"],
         status=row["status"],
+        target_seconds=plan.target_seconds if plan else None,
         code_hash=row["code_hash"],
+        code_lines=None if code is None else len(code.splitlines()),
         rejection_reason=row["rejection_reason"],
-        artifacts=artifacts,
+        artifacts=_parse_artifacts(row["artifacts_json"]),
         updated_at=row["updated_at"],
     )
+
+
+def _scene_row(connection: sqlite3.Connection, project_id: str, scene_id: str) -> sqlite3.Row:
+    validate_scene_id(scene_id)
+    row = connection.execute(
+        "SELECT * FROM scenes WHERE project_id = ? AND scene_id = ?",
+        (project_id, scene_id),
+    ).fetchone()
+    if row is None:
+        raise SceneNotFoundError(f"scene not found: {scene_id}")
+    return row
+
+
+def get_scene_row(project_id: str, scene_id: str) -> dict[str, Any]:
+    """Load one scene row or raise a clear not-found error."""
+    with project_connection(project_id) as connection:
+        return dict(_scene_row(connection, project_id, scene_id))
+
+
+def get_scene_summary(project_id: str, scene_id: str) -> SceneSummary:
+    """Return compact metadata for one scene."""
+    with project_connection(project_id) as connection:
+        return _scene_summary(_scene_row(connection, project_id, scene_id))
+
+
+def list_scene_summaries(project_id: str) -> list[SceneSummary]:
+    """List scenes in storyboard insertion order."""
+    with project_connection(project_id) as connection:
+        rows = connection.execute(
+            "SELECT * FROM scenes WHERE project_id = ? ORDER BY rowid", (project_id,)
+        ).fetchall()
+    return [_scene_summary(row) for row in rows]
+
+
+def get_scene_detail(project_id: str, scene_id: str) -> SceneDetail:
+    """Return full scene metadata, plan, and code."""
+    with project_connection(project_id) as connection:
+        row = _scene_row(connection, project_id, scene_id)
+
+    summary = _scene_summary(row)
+    plan = _parse_plan(row["plan_json"], strict=True)
+    if plan is None:
+        raise ValueError(f"scene plan is corrupt: {scene_id}")
+    return SceneDetail(
+        **summary.model_dump(),
+        plan=plan,
+        code=row["code"],
+        code_path=str(scene_file(project_id, scene_id)),
+    )
+
+
+def save_storyboard(project_id: str, storyboard: Storyboard) -> Storyboard:
+    """Persist a storyboard and upsert its planned scenes."""
+    now = utc_now()
+    with project_connection(project_id) as connection:
+        cursor = connection.execute(
+            "UPDATE projects SET storyboard_json = ?, updated_at = ? WHERE project_id = ?",
+            (storyboard.model_dump_json(), now, project_id),
+        )
+        if cursor.rowcount != 1:
+            raise ProjectNotFoundError(f"project not found: {project_id}")
+
+        for clip in storyboard.clips:
+            connection.execute(
+                """
+                INSERT INTO scenes (
+                    project_id, scene_id, title, plan_json, code, code_hash,
+                    status, rejection_reason, artifacts_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, NULL, NULL, 'planned', NULL, '{}', ?)
+                ON CONFLICT(project_id, scene_id) DO UPDATE SET
+                    title = excluded.title,
+                    plan_json = excluded.plan_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    project_id,
+                    clip.scene_id,
+                    clip.title,
+                    clip.model_dump_json(),
+                    now,
+                ),
+            )
+
+        _insert_event(
+            connection,
+            project_id,
+            None,
+            "storyboard_saved",
+            {"clip_count": len(storyboard.clips), "total_seconds": storyboard.total_seconds},
+            now,
+        )
+    return storyboard
+
+
+def update_scene_code(project_id: str, scene_id: str, code: str, code_hash: str) -> dict[str, Any]:
+    """Store scene code, reset its status, and report stale artifacts."""
+    now = utc_now()
+    with project_connection(project_id) as connection:
+        row = _scene_row(connection, project_id, scene_id)
+        changed = row["code_hash"] != code_hash
+        stale_artifacts = _parse_artifacts(row["artifacts_json"]) if changed else {}
+        connection.execute(
+            """
+            UPDATE scenes SET
+                code = ?, code_hash = ?, status = 'code_written',
+                rejection_reason = NULL, artifacts_json = ?, updated_at = ?
+            WHERE project_id = ? AND scene_id = ?
+            """,
+            (
+                code,
+                code_hash,
+                json.dumps({} if changed else _parse_artifacts(row["artifacts_json"])),
+                now,
+                project_id,
+                scene_id,
+            ),
+        )
+        _insert_event(
+            connection,
+            project_id,
+            scene_id,
+            "scene_written",
+            {"code_hash": code_hash, "changed": changed, "lines": len(code.splitlines())},
+            now,
+        )
+    return {"changed": changed, "stale_artifacts": stale_artifacts}
+
+
+def record_lint_result(project_id: str, scene_id: str, report: LintReport) -> SceneSummary:
+    """Store a lint report and advance or hold the scene status."""
+    now = utc_now()
+    with project_connection(project_id) as connection:
+        row = _scene_row(connection, project_id, scene_id)
+        artifacts = _parse_artifacts(row["artifacts_json"])
+        artifacts["lint"] = report.model_dump(mode="json")
+        status = "lint_passed" if report.ok else "code_written"
+        connection.execute(
+            """
+            UPDATE scenes SET status = ?, artifacts_json = ?, updated_at = ?
+            WHERE project_id = ? AND scene_id = ?
+            """,
+            (status, json.dumps(artifacts), now, project_id, scene_id),
+        )
+        _insert_event(
+            connection,
+            project_id,
+            scene_id,
+            "lint_passed" if report.ok else "lint_failed",
+            {
+                "ok": report.ok,
+                "issue_count": len(report.issues),
+                "truncated": report.truncated,
+            },
+            now,
+        )
+        row = _scene_row(connection, project_id, scene_id)
+    return _scene_summary(row)
+
+
+def get_project_config(project_id: str) -> ProjectConfig:
+    """Load a project's validated config."""
+    return ProjectConfig.model_validate_json(get_project_row(project_id)["config_json"])
 
 
 def get_project_summary(project_id: str) -> ProjectSummary:
@@ -214,8 +405,12 @@ def get_project_summary(project_id: str) -> ProjectSummary:
 
     config = ProjectConfig.model_validate_json(row["config_json"])
     try:
-        storyboard = None if row["storyboard_json"] is None else json.loads(row["storyboard_json"])
-    except json.JSONDecodeError as exc:
+        storyboard = (
+            None
+            if row["storyboard_json"] is None
+            else Storyboard.model_validate_json(row["storyboard_json"])
+        )
+    except ValueError as exc:
         raise ValueError(f"corrupt storyboard for project {project_id}") from exc
 
     scenes = [_scene_summary(scene) for scene in scene_rows]

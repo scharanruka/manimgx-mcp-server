@@ -19,6 +19,10 @@ class ProjectNotFoundError(FileNotFoundError):
     """Raised when a project database does not exist."""
 
 
+class SceneNotFoundError(FileNotFoundError):
+    """Raised when a scene is not part of the project storyboard."""
+
+
 _PROJECT_ID_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?-[0-9a-f]{6}")
 _SCENE_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
@@ -130,3 +134,44 @@ def scene_file(project_id: str, scene_id: str) -> Path:
     if path.resolve(strict=False).parent != directory.resolve(strict=False):
         raise PathSecurityError(f"scene path escapes the project: {scene_id!r}")
     return path
+
+
+def resolve_project_path(project_id: str, path_value: str) -> Path:
+    """Resolve a path inside a project, rejecting absolute or escaping paths."""
+    base = project_dir(project_id).resolve(strict=False)
+    raw = Path(path_value)
+    candidate = raw if raw.is_absolute() else base / raw
+    resolved = candidate.resolve(strict=False)
+    if resolved != base and base not in resolved.parents:
+        raise PathSecurityError(f"path escapes the project: {path_value!r}")
+    return resolved
+
+
+def _artifact_values(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [
+            item
+            for key, nested in value.items()
+            if key != "lint"
+            for item in _artifact_values(nested)
+        ]
+    if isinstance(value, (list, tuple, set)):
+        return [item for nested in value for item in _artifact_values(nested)]
+    return []
+
+
+def delete_artifact_files(project_id: str, artifacts: dict[str, object]) -> list[str]:
+    """Delete files referenced by artifact metadata, but only under render roots."""
+    base = project_dir(project_id).resolve(strict=False)
+    allowed_roots = (base / "renders", base / "frames", base / "exports")
+    deleted: list[str] = []
+    for value in _artifact_values(artifacts):
+        resolved = resolve_project_path(project_id, value)
+        if not any(resolved == root or root in resolved.parents for root in allowed_roots):
+            continue
+        if resolved.is_file():
+            resolved.unlink()
+            deleted.append(str(resolved))
+    return deleted

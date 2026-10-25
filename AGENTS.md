@@ -16,4 +16,4 @@
 
 ## Current milestone
 
-Milestone 2 — SQLite persistence and project tools. See `PLAN.md` for the full spec.
+Milestone 3 — scene storage and deterministic linting. See `PLAN.md` for the full spec.
