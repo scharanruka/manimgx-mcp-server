@@ -16,4 +16,5 @@
 
 ## Current milestone
 
-Milestone 6 — review loop and post-processing. See `PLAN.md` for the full spec.
+Milestone 7 complete — resources, prompts, CI, and deployable packaging. See
+`PLAN.md` for the full spec.

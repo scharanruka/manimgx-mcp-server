@@ -48,7 +48,11 @@ from paths import (
     resolve_project_path,
     scene_file,
 )
-from prompts import build_scene_edit_prompt
+from prompts import (
+    build_scene_edit_prompt,
+    build_scene_generate_prompt,
+    build_storyboard_plan_prompt,
+)
 from render import run_preview, run_worker
 
 logger = logging.getLogger(__name__)
@@ -628,6 +632,24 @@ def scene_open_mpv(
 
 
 @mcp.prompt
+def storyboard_plan_prompt(
+    project_id: str,
+    brief: str,
+    clip_count: int = 6,
+    seconds_per_clip: float = 12,
+    style: str = "technical",
+) -> str:
+    """Plan clips as Storyboard JSON with DeepSeek Pro."""
+    return build_storyboard_plan_prompt(project_id, brief, clip_count, seconds_per_clip, style)
+
+
+@mcp.prompt
+def scene_generate_prompt(project_id: str, scene_id: str) -> str:
+    """Generate one ManimGX scene file with DeepSeek Flash."""
+    return build_scene_generate_prompt(project_id, scene_id)
+
+
+@mcp.prompt
 def scene_edit_prompt(
     project_id: str,
     scene_id: str,
@@ -635,6 +657,64 @@ def scene_edit_prompt(
 ) -> str:
     """Build a compact scene repair prompt without chat history."""
     return build_scene_edit_prompt(project_id, scene_id, rejection_reason)
+
+
+@mcp.resource(
+    "manimgx://projects/{project_id}/config",
+    name="project_config",
+    description="Validated project configuration JSON.",
+    mime_type="application/json",
+)
+def project_config_resource(project_id: str) -> dict[str, Any]:
+    return db.get_project_config(project_id).model_dump(mode="json")
+
+
+@mcp.resource(
+    "manimgx://projects/{project_id}/storyboard",
+    name="project_storyboard",
+    description="Project storyboard JSON.",
+    mime_type="application/json",
+)
+def project_storyboard_resource(project_id: str) -> dict[str, Any]:
+    storyboard = db.get_project_summary(project_id).storyboard
+    return {} if storyboard is None else storyboard.model_dump(mode="json")
+
+
+@mcp.resource(
+    "manimgx://projects/{project_id}/scenes/{scene_id}/code",
+    name="scene_code",
+    description="Current scene Python source.",
+    mime_type="text/x-python",
+)
+def scene_code_resource(project_id: str, scene_id: str) -> str:
+    return db.get_scene_detail(project_id, scene_id).code or ""
+
+
+@mcp.resource(
+    "manimgx://projects/{project_id}/scenes/{scene_id}/report",
+    name="scene_report",
+    description="Last lint, inspect, and render reports for a scene.",
+    mime_type="application/json",
+)
+def scene_report_resource(project_id: str, scene_id: str) -> dict[str, Any]:
+    detail = db.get_scene_detail(project_id, scene_id)
+    keys = (
+        "lint",
+        "inspect",
+        "preview",
+        "final",
+        "preview_batch",
+        "final_batch",
+        "frame_report",
+    )
+    reports = {key: detail.artifacts[key] for key in keys if key in detail.artifacts}
+    return {
+        "project_id": project_id,
+        "scene_id": scene_id,
+        "status": detail.status,
+        "rejection_reason": detail.rejection_reason,
+        "reports": reports,
+    }
 
 
 def main() -> None:

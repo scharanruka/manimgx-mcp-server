@@ -27,11 +27,20 @@ async def main() -> None:
         async with Client(transport) as client:
             tools = sorted(tool.name for tool in await client.list_tools())
             prompts = sorted(prompt.name for prompt in await client.list_prompts())
-            print(f"Connected to manimgx MCP server ({len(tools)} tools, {len(prompts)} prompts)")
+            resources = sorted(
+                template.uri_template for template in await client.list_resource_templates()
+            )
+            print(
+                f"Connected to manimgx MCP server "
+                f"({len(tools)} tools, {len(prompts)} prompts, "
+                f"{len(resources)} resource templates)"
+            )
             for name in tools:
                 print(f"  - {name}")
             for name in prompts:
                 print(f"  prompt: {name}")
+            for uri in resources:
+                print(f"  resource: {uri}")
 
             created = await client.call_tool("project_create", {"name": "Connection Test"})
             if created.is_error:

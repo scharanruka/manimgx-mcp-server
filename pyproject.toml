@@ -8,14 +8,31 @@ license = { text = "MIT" }
 authors = [
     { name = "scharanruka", email = "saicharanruka@gmail.com" }
 ]
+keywords = ["manim", "manimgx", "mcp", "typst", "animation", "gpu"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
 dependencies = [
     "fastmcp>=3.0",
     "manimgx>=0.1.1",
     "pydantic>=2.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/scharanruka/manimgx-mcp-server"
+Repository = "https://github.com/scharanruka/manimgx-mcp-server"
+Issues = "https://github.com/scharanruka/manimgx-mcp-server/issues"
+
 [project.scripts]
 manimgx-mcp = "server:main"
+manimgx-mcp-server = "server:main"
 
 [dependency-groups]
 dev = [
