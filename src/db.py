@@ -71,6 +71,22 @@ CREATE INDEX IF NOT EXISTS idx_scenes_project ON scenes(project_id);
 CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id, id);
 """
 
+PROJECT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("brief", "TEXT"),
+    ("clip_count", "INTEGER"),
+    ("session_id", "TEXT"),
+    ("ephemeral", "INTEGER NOT NULL DEFAULT 0"),
+    ("last_seen", "TEXT"),
+)
+
+
+def _ensure_columns(connection: sqlite3.Connection) -> None:
+    """Add newer project columns to databases created by older versions."""
+    existing = {row[1] for row in connection.execute("PRAGMA table_info(projects)")}
+    for name, ddl in PROJECT_COLUMNS:
+        if name not in existing:
+            connection.execute(f"ALTER TABLE projects ADD COLUMN {name} {ddl}")
+
 
 def utc_now() -> str:
     """Return an ISO-8601 UTC timestamp."""
@@ -104,26 +120,45 @@ def project_connection(project_id: str) -> Iterator[sqlite3.Connection]:
     if not path.is_file():
         raise ProjectNotFoundError(f"project not found: {project_id}")
     with _connect(path) as connection:
+        _ensure_columns(connection)
         yield connection
 
 
-def create_project_record(project_id: str, name: str, config: ProjectConfig) -> None:
+def create_project_record(
+    project_id: str,
+    name: str,
+    config: ProjectConfig,
+    *,
+    brief: str | None = None,
+    clip_count: int | None = None,
+    session_id: str | None = None,
+    ephemeral: bool = False,
+) -> None:
     """Insert a project row into an already-created project directory."""
     path = db_path_for(project_id)
     now = utc_now()
     with _connect(path) as connection:
         connection.executescript(SCHEMA)
+        _ensure_columns(connection)
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute(
             """
-            INSERT INTO projects (project_id, name, config_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO projects (
+                project_id, name, config_json, created_at, updated_at,
+                brief, clip_count, session_id, ephemeral, last_seen
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project_id,
                 name,
                 json.dumps(config.model_dump(mode="json")),
                 now,
+                now,
+                brief,
+                clip_count,
+                session_id,
+                1 if ephemeral else 0,
                 now,
             ),
         )
@@ -202,6 +237,63 @@ def get_project_row(project_id: str) -> dict[str, Any]:
     return dict(row)
 
 
+def get_project_meta(project_id: str) -> dict[str, Any]:
+    """Return the session and origin metadata for a project."""
+    row = get_project_row(project_id)
+    return {
+        "brief": row.get("brief"),
+        "clip_count": row.get("clip_count"),
+        "session_id": row.get("session_id"),
+        "ephemeral": bool(row.get("ephemeral")),
+        "last_seen": row.get("last_seen"),
+    }
+
+
+def set_project_origin(
+    project_id: str,
+    *,
+    brief: str | None,
+    clip_count: int | None,
+    session_id: str | None,
+    ephemeral: bool,
+) -> None:
+    """Record the brief, clip count, and owning session for a project."""
+    now = utc_now()
+    with project_connection(project_id) as connection:
+        connection.execute(
+            """
+            UPDATE projects SET
+                brief = ?, clip_count = ?, session_id = ?, ephemeral = ?, last_seen = ?
+            WHERE project_id = ?
+            """,
+            (
+                brief,
+                clip_count,
+                session_id,
+                1 if ephemeral else 0,
+                now,
+                project_id,
+            ),
+        )
+        _insert_event(
+            connection,
+            project_id,
+            None,
+            "project_started",
+            {"brief": brief, "clip_count": clip_count, "session_id": session_id},
+            now,
+        )
+
+
+def touch_project(project_id: str) -> None:
+    """Refresh a project's last-seen timestamp."""
+    with project_connection(project_id) as connection:
+        connection.execute(
+            "UPDATE projects SET last_seen = ? WHERE project_id = ?",
+            (utc_now(), project_id),
+        )
+
+
 def _parse_artifacts(raw: str | None) -> dict[str, Any]:
     try:
         value = json.loads(raw or "{}")
@@ -219,19 +311,32 @@ def _parse_plan(raw: str, *, strict: bool) -> ScenePlan | None:
         return None
 
 
+def _rendered_seconds(artifacts: dict[str, Any]) -> float | None:
+    """Read a scene's measured duration from its newest render report."""
+    for key in ("final", "final_batch", "preview", "preview_batch"):
+        report = artifacts.get(key)
+        if isinstance(report, dict):
+            value = report.get("duration_seconds")
+            if isinstance(value, (int, float)):
+                return round(float(value), 3)
+    return None
+
+
 def _scene_summary(row: sqlite3.Row) -> SceneSummary:
     plan = _parse_plan(row["plan_json"], strict=False)
     code = row["code"]
+    artifacts = _parse_artifacts(row["artifacts_json"])
     return SceneSummary(
         project_id=row["project_id"],
         scene_id=row["scene_id"],
         title=row["title"],
         status=row["status"],
         target_seconds=plan.target_seconds if plan else None,
+        rendered_seconds=_rendered_seconds(artifacts),
         code_hash=row["code_hash"],
         code_lines=None if code is None else len(code.splitlines()),
         rejection_reason=row["rejection_reason"],
-        artifacts=_parse_artifacts(row["artifacts_json"]),
+        artifacts=artifacts,
         updated_at=row["updated_at"],
     )
 
@@ -323,7 +428,7 @@ def save_storyboard(project_id: str, storyboard: Storyboard) -> Storyboard:
             project_id,
             None,
             "storyboard_saved",
-            {"clip_count": len(storyboard.clips), "total_seconds": storyboard.total_seconds},
+            {"clip_count": len(storyboard.clips)},
             now,
         )
     return storyboard

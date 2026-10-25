@@ -130,24 +130,29 @@ protocol.
 ## Quick workflow
 
 ```text
-project_create
-  → storyboard_save
-      → scene_write
-          → scene_lint
-              → scene_inspect
-                  → scene_render_preview
-                      → scene_review(approve)
-                          → scene_render_final
-                              → project_stitch
+project_start(brief)            # asks for aspect ratio + clip count if missing
+  → storyboard_save(beats)      # no durations: the beats decide the length
+      → project_build(code)     # lint + render + stitch + bundle, one call
+          → { video.mp4, code.py, storyboard.json, report.json }
 ```
 
-For 10–20 clips, use `project_render_batch` instead of rendering each clip
-individually. It launches one worker process for the whole batch.
+`project_build` splits a combined `code.py` into scene files, lints all of them,
+renders only the scenes whose code changed in one worker process, stitches the
+final video, writes the bundle, and deletes previews, frames and scratch files.
+Pass `review=true` to stop after previews, and `inspect=true` for layout checks.
+Editing is the same call: pass the edited `code.py` back to `project_build`.
+
+The lower-level tools (`scene_write`, `scene_lint`, `scene_render_preview`,
+`scene_review`, `project_stitch`, …) remain available for debugging and manual
+control.
 
 ## Tools
 
 | Tool | Description |
 |---|---|
+| `project_start` | Create a project from a brief, eliciting missing format parameters. |
+| `project_build` | Lint, render, stitch, and bundle a project in one call. |
+| `project_export` | Return the finished bundle without rebuilding. |
 | `project_create` | Create a project with a 9:16 or 16:9 config. |
 | `project_get` | Read config, paths, storyboard, scenes, and status counts. |
 | `project_update_theme` | Update validated colors, fonts, safe area, and render settings. |
@@ -156,7 +161,7 @@ individually. It launches one worker process for the whole batch.
 | `scene_list` | List scenes with status and code metadata. |
 | `scene_get` | Read one scene's plan, code, and artifacts. |
 | `scene_lint` | Run deterministic AST checks without executing code. |
-| `scene_inspect` | Check layout and generate storyboard frames without video. |
+| `scene_inspect` | Check layout at the project's frame size without video (opt-in). |
 | `scene_render_preview` | Render a 480p15 preview and return its report. |
 | `project_render_batch` | Render many preview or final clips in one worker. |
 | `scene_render_final` | Render a 1080p60 final; requires approval or `force`. |
@@ -193,7 +198,11 @@ reason.
 
 ## Storage
 
-Projects live under `MANIM_MCP_HOME` (default `~/.manimgx-mcp/projects`).
+Working projects live under `MANIM_MCP_HOME` (default `~/.manimgx-mcp/projects`).
+Projects created by `project_start` are ephemeral: their directory is deleted when
+the MCP session disconnects. The finished bundle is copied to
+`MANIM_MCP_EXPORT_HOME` (default `~/.manimgx-mcp/exports/<project_id>/`) and kept
+for `MANIM_MCP_EXPORT_TTL_DAYS` days (default 7).
 
 ```text
 <MANIM_MCP_HOME>/<project_id>/
@@ -206,6 +215,14 @@ Projects live under `MANIM_MCP_HOME` (default `~/.manimgx-mcp/projects`).
 ├── frames/
 ├── exports/
 └── logs/
+```
+
+```text
+<MANIM_MCP_EXPORT_HOME>/<project_id>/
+├── video.mp4
+├── code.py
+├── storyboard.json
+└── report.json
 ```
 
 `project.db` is the source of truth. It stores projects, scenes, artifacts, and an

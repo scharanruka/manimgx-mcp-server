@@ -40,14 +40,11 @@ def project(projects_home: Path):
                     {
                         "scene_id": "scene_01",
                         "title": "Surface clip",
-                        "target_seconds": 10,
-                        "visual": "Text",
+                        "beats": [{"action": "write the word Resource", "objects": ["text"]}],
                         "key_objects": ["text"],
-                        "animation_notes": "Write it.",
                         "typst_expressions": ["Resource"],
                     }
                 ],
-                "total_seconds": 10,
             }
         ),
     )
@@ -147,3 +144,39 @@ async def test_prompts_contain_project_context(project) -> None:
         )
         assert "Fix the layout" in edited
         assert CODE.strip() in edited
+
+
+@pytest.mark.asyncio
+async def test_build_tools_are_registered() -> None:
+    async with Client(mcp) as client:
+        tools = {tool.name: tool for tool in await client.list_tools()}
+
+    assert {"project_build", "project_export"} <= set(tools)
+    schema = tools["project_build"].input_schema["properties"]
+    assert {"project_id", "code", "review", "inspect", "force"} <= set(schema)
+
+
+@pytest.mark.asyncio
+async def test_scene_prompt_uses_beats_not_seconds(project) -> None:
+    async with Client(mcp) as client:
+        prompt = _prompt_text(
+            await client.get_prompt(
+                "scene_generate_prompt",
+                {"project_id": project.project_id, "scene_id": "scene_01"},
+            )
+        )
+    assert "The clip's duration is whatever the beats produce" in prompt
+    assert "Do not add self.wait() longer than 1 second" in prompt
+    assert "45 seconds" not in prompt
+    assert "target_seconds" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_start_tool_is_registered() -> None:
+    async with Client(mcp) as client:
+        tools = {tool.name: tool for tool in await client.list_tools()}
+
+    assert "project_start" in tools
+    schema = tools["project_start"].input_schema["properties"]
+    assert {"brief", "aspect_ratio", "clip_count", "style", "theme"} <= set(schema)
+    assert "ctx" not in schema

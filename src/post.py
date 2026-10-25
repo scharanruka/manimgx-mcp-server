@@ -65,13 +65,52 @@ def _concat_line(path: Path) -> str:
     return f"file '{escaped}'\n"
 
 
+def _probe_fps(video: Path) -> int | None:
+    """Read a video's frame rate with ffprobe when it is available."""
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        return None
+    code, stdout, _ = _run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video),
+        ]
+    )
+    if code != 0:
+        return None
+    try:
+        numerator, _, denominator = stdout.strip().partition("/")
+        value = float(numerator) / float(denominator or 1)
+    except (ValueError, ZeroDivisionError):
+        return None
+    return round(value) or None
+
+
 def stitch(
     videos: list[Path],
     scene_ids: list[str],
     output: Path,
     work_dir: Path,
+    *,
+    preset: str = "medium",
+    crf: float = 18.0,
+    fps: int | None = None,
 ) -> ExportReport:
-    """Concatenate videos with ffmpeg, re-encoding only if stream copy fails."""
+    """Concatenate videos with ffmpeg and re-time them to a constant frame rate.
+
+    Stream copy is not an option: ManimGX writes a still hold as one frame with a
+    long duration, and the concat demuxer cuts each segment at its last packet PTS,
+    which silently drops the trailing hold of the final clip.  Re-encoding with
+    ``-fps_mode cfr`` rebuilds the timeline from each input's real duration.
+    """
     if not videos:
         return ExportReport(ok=False, scene_ids=scene_ids, error="no final videos to stitch")
 
@@ -89,7 +128,8 @@ def stitch(
     list_path.write_text("".join(_concat_line(path) for path in videos), encoding="utf-8")
     output.unlink(missing_ok=True)
 
-    base = [
+    frame_rate = fps or _probe_fps(videos[0])
+    command = [
         ffmpeg,
         "-y",
         "-hide_banner",
@@ -101,40 +141,32 @@ def stitch(
         "0",
         "-i",
         str(list_path),
+        "-c:v",
+        "libx264",
+        "-preset",
+        preset,
+        "-crf",
+        f"{crf:g}",
+        "-pix_fmt",
+        "yuv420p",
+        "-fps_mode",
+        "cfr",
+        "-c:a",
+        "aac",
     ]
+    if frame_rate is not None:
+        command.extend(["-r", str(frame_rate)])
+    command.extend(["-movflags", "+faststart", str(output)])
+
     try:
-        code, stdout, stderr = _run([*base, "-c", "copy", str(output)])
-        reencoded = False
-        if code != 0 or not output.is_file():
-            first_error = _last_line(stderr)
-            output.unlink(missing_ok=True)
-            code, stdout, stderr = _run(
-                [
-                    *base,
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "medium",
-                    "-crf",
-                    "18",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-c:a",
-                    "aac",
-                    "-movflags",
-                    "+faststart",
-                    str(output),
-                ]
-            )
-            reencoded = True
-            stderr = f"{first_error}\n{stderr}".strip()
+        code, stdout, stderr = _run(command)
 
         if code != 0 or not output.is_file() or output.stat().st_size == 0:
             output.unlink(missing_ok=True)
             return ExportReport(
                 ok=False,
                 scene_ids=scene_ids,
-                reencoded=reencoded,
+                reencoded=True,
                 error=_last_line(stderr) or "ffmpeg failed to stitch the videos",
                 stdout=_tail(stdout),
                 stderr=_tail(stderr),
@@ -147,12 +179,54 @@ def stitch(
             scene_ids=scene_ids,
             duration_seconds=duration,
             size_bytes=output.stat().st_size,
-            reencoded=reencoded,
+            reencoded=True,
             stdout=_tail(stdout),
             stderr=_tail(stderr),
         )
     finally:
         list_path.unlink(missing_ok=True)
+
+
+def _frame_times(video: Path) -> list[float]:
+    """Return the presentation times of every video frame, oldest first."""
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        return []
+    code, stdout, _ = _run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "frame=pts_time",
+            "-of",
+            "csv=p=0",
+            str(video),
+        ]
+    )
+    if code != 0:
+        return []
+    times: list[float] = []
+    for line in stdout.splitlines():
+        try:
+            times.append(float(line.strip().strip(",")))
+        except ValueError:
+            continue
+    return times
+
+
+def _clamp_to_frame(moment: float, frame_times: list[float]) -> float:
+    """Pick the last frame shown at or before ``moment``.
+
+    A still hold is one frame with a long duration, so seeking to a time inside
+    the hold finds no packet at or after it.  Seeking to the frame's own PTS does.
+    """
+    if not frame_times:
+        return moment
+    earlier = [value for value in frame_times if value <= moment + 1e-6]
+    return earlier[-1] if earlier else frame_times[0]
 
 
 def extract_frames(video: Path, output_dir: Path, times: list[float]) -> FrameReport:
@@ -170,6 +244,7 @@ def extract_frames(video: Path, output_dir: Path, times: list[float]) -> FrameRe
     for old in output_dir.glob("frame_*.png"):
         old.unlink(missing_ok=True)
 
+    frame_times = _frame_times(video)
     frame_paths: list[str] = []
     errors: list[str] = []
     stdout_parts: list[str] = []
@@ -177,6 +252,7 @@ def extract_frames(video: Path, output_dir: Path, times: list[float]) -> FrameRe
 
     for index, moment in enumerate(times):
         frame = output_dir / f"frame_{index:02d}_{moment:g}.png"
+        at = _clamp_to_frame(moment, frame_times)
         code, stdout, stderr = _run(
             [
                 ffmpeg,
@@ -184,11 +260,13 @@ def extract_frames(video: Path, output_dir: Path, times: list[float]) -> FrameRe
                 "-hide_banner",
                 "-loglevel",
                 "error",
-                "-ss",
-                f"{moment:.3f}",
                 "-i",
                 str(video),
+                "-ss",
+                f"{at:.6f}",
                 "-frames:v",
+                "1",
+                "-update",
                 "1",
                 str(frame),
             ]

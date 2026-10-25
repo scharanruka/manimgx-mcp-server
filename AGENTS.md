@@ -14,7 +14,15 @@
 - Run `uv run pytest` before committing.
 - Do not add voiceover/TTS in v1. It is a later phase.
 
+## Scene contract
+
+- Describe clips as beats, never as seconds. Do not plan or chase a duration.
+- Each beat is one `self.play(...)` transition or one short sequence.
+- `self.wait()` stays at 1 second or less; `run_time` at 2 seconds or less
+  unless a beat explicitly needs longer.
+- The clip's duration is whatever the beats produce.
+
 ## Current milestone
 
-Milestone 7 complete — resources, prompts, CI, and deployable packaging. See
-`PLAN.md` for the full spec.
+Milestone 8 in progress — beat-driven planning, one-call `project_build`,
+`code.py` bundles, and session-scoped cleanup. See `PLAN.md` for the spec.

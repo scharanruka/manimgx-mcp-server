@@ -70,11 +70,6 @@ def build_storyboard_plan_prompt(
         raise ValueError("brief must not be empty")
     if not 1 <= clip_count <= 100:
         raise ValueError("clip_count must be between 1 and 100")
-    if not 1 <= seconds_per_clip <= 30:
-        raise ValueError("seconds_per_clip must be between 1 and 30")
-    total = clip_count * seconds_per_clip
-    if not 10 <= total <= 90:
-        raise ValueError("clip_count * seconds_per_clip must be between 10 and 90 seconds")
 
     project = db.get_project_row(project_id)
     config = db.get_project_config(project_id)
@@ -89,11 +84,12 @@ Brief:
 
 Style: {style}
 Clip count: {clip_count}
-Seconds per clip: {seconds_per_clip:g}
-Total seconds: {total:g}
 Aspect ratio: {config.aspect_ratio}
 Safe area: {safe_area}
 Math syntax: Typst (never LaTeX).
+
+Describe each clip as a list of beats, never as a duration. The clip's length is
+whatever the beats produce — do not plan seconds or try to hit a target length.
 
 Output schema:
 {{
@@ -102,21 +98,28 @@ Output schema:
     {{
       "scene_id": "scene_01",
       "title": "Short clip title",
-      "target_seconds": {seconds_per_clip:g},
-      "visual": "One or two sentences describing what appears",
-      "key_objects": ["formula", "label", "diagram"],
-      "animation_notes": "Short notes on motion and sequencing",
-      "typst_expressions": ["sum_(k=1)^n k = (n(n+1))/2"]
+      "beats": [
+        {{"action": "draw the coordinate grid and the unit square",
+          "objects": ["grid", "unit square"]}},
+        {{"action": "apply A to the grid, shearing it into a parallelogram",
+          "objects": ["grid", "matrix"],
+          "typst": "A = mat(1, 0.5; 0.2, 0.8)"}},
+        {{"action": "reveal the rank badge and the takeaway line",
+          "objects": ["rank badge", "label"]}}
+      ],
+      "key_objects": ["grid", "matrix", "rank badge"],
+      "typst_expressions": ["A = mat(1, 0.5; 0.2, 0.8)"],
+      "notes": "Optional staging note"
     }}
-  ],
-  "total_seconds": {total:g}
+  ]
 }}
 
 Rules:
 - Produce exactly {clip_count} clips with unique slug scene_ids: scene_01, scene_02, ...
-- Each target_seconds is between 1 and 30. total_seconds must equal the sum of all targets.
-- Keep visual descriptions and animation notes short.
+- Give each clip 3 to 6 beats. Each beat is one self.play(...) transition or one short sequence.
+- Keep beat actions short and concrete. Order them as they should appear.
 - Use Typst math expressions such as `sum_(k=1)^n k`, not LaTeX.
+- Do not include target_seconds or total_seconds.
 - Do not write Python code in this step.
 """
 
@@ -131,11 +134,21 @@ def build_scene_generate_prompt(project_id: str, scene_id: str) -> str:
     if parts[0] == "scene":
         parts = parts[1:]
     class_name = "Scene" + "".join(part.title() for part in parts)
+    beat_count = len(detail.plan.beats)
+    duration_rule = (
+        f"Build the scene around the {beat_count} beats in the plan. Each beat is one "
+        "self.play(...) transition or one short sequence. Do not add self.wait() longer "
+        "than 1 second. Do not use run_time greater than 2.0 unless the beat explicitly "
+        "requires it. The clip's duration is whatever the beats produce — do not try to "
+        "hit a specific length."
+    )
     return f"""You are writing one ManimGX scene file. Use DeepSeek Flash.
 Return only the complete Python file — no prose and no Markdown fence.
 
+{duration_rule}
+
 Scene plan:
-{detail.plan.model_dump_json(indent=2)}
+{detail.plan.model_dump_json(indent=2, exclude_none=True)}
 
 Project config:
 {config.model_dump_json(indent=2)}
@@ -156,8 +169,8 @@ Rules:
 - Define exactly one class inheriting `m.Scene` with `def construct(self) -> None:`.
 - Do not set resolution or FPS in code; the renderer sets them.
 - Stay inside the safe area: {safe_area}.
-- Keep the file under 120 lines and the estimated duration at most 45 seconds.
-- Use `self.play(...)` and `self.wait(...)` only for time.
+- Keep the file under 150 lines.
+- Use `self.play(...)` and `self.wait(...)` only for time; never pad with waits.
 
 Typst examples:
 ```python
@@ -193,7 +206,7 @@ Return only the complete replacement Python file, with no prose or code fence.
 
 Scene: {detail.scene_id} — {detail.title}
 Scene plan:
-{detail.plan.model_dump_json(indent=2)}
+{detail.plan.model_dump_json(indent=2, exclude_none=True)}
 
 Project config:
 {config.model_dump_json(indent=2)}
@@ -220,6 +233,6 @@ Rules:
 - Do not set resolution or FPS in code.
 - Stay inside the safe area from the project config.
 - Use `self.play(...)` and `self.wait(...)` only for time.
-  Keep the scene at most 45 seconds and under 120 lines.
+  Keep the scene under 150 lines and do not pad with waits to reach a length.
 - Fix every listed lint and layout issue plus the rejection reason. Preserve the scene's intent.
 """

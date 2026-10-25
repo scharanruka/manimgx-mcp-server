@@ -9,7 +9,8 @@ from models import LintIssue, LintReport, ProjectConfig
 
 MAX_LINES = 200
 MAX_ISSUES = 10
-MAX_DURATION_SECONDS = 45.0
+MAX_WAIT_SECONDS = 1.0
+MAX_RUN_TIME_SECONDS = 2.0
 
 FORBIDDEN_MODULES = {
     "manim",
@@ -332,6 +333,50 @@ def _estimate_duration(scene: ast.ClassDef | None) -> float:
     return total
 
 
+def _check_pacing(scene: ast.ClassDef | None, issues: _IssueCollector) -> None:
+    """Warn when a scene pads time instead of following its beats."""
+    construct = _construct_method(scene) if scene is not None else None
+    if construct is None:
+        return
+
+    for node in ast.walk(construct):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if not isinstance(node.func.value, ast.Name) or node.func.value.id != "self":
+            continue
+
+        if node.func.attr == "wait":
+            value = node.args[0] if node.args else None
+            if value is None:
+                value = next(
+                    (keyword.value for keyword in node.keywords if keyword.arg == "duration"),
+                    None,
+                )
+            seconds = _literal_number(value) if value is not None else None
+            if seconds is not None and seconds > MAX_WAIT_SECONDS:
+                issues.add(
+                    "long_wait",
+                    f"self.wait({seconds:g}) holds longer than {MAX_WAIT_SECONDS:g}s",
+                    "let the beats set the pace; keep waits at 1s or less",
+                    line=node.lineno,
+                    severity="warning",
+                )
+        elif node.func.attr == "play":
+            value = next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "run_time"),
+                None,
+            )
+            seconds = _literal_number(value) if value is not None else None
+            if seconds is not None and seconds > MAX_RUN_TIME_SECONDS:
+                issues.add(
+                    "long_run_time",
+                    f"run_time={seconds:g} is longer than {MAX_RUN_TIME_SECONDS:g}s",
+                    "keep run_time at 2s or less unless the beat requires it",
+                    line=node.lineno,
+                    severity="warning",
+                )
+
+
 def _check_typesetting(tree: ast.Module, config: ProjectConfig, issues: _IssueCollector) -> None:
     m_attributes = [
         node
@@ -453,20 +498,14 @@ def lint_scene(code: str, config: ProjectConfig) -> LintReport:
     scene = _check_scene_class(tree, issues)
     _check_forbidden_calls(tree, issues)
     _check_infinite_loops(tree, issues)
+    _check_pacing(scene, issues)
 
     duration = _estimate_duration(scene)
-    if duration > MAX_DURATION_SECONDS:
-        issues.add(
-            "duration",
-            f"estimated duration is {duration:.1f}s; the limit is 45s",
-            "shorten plays and waits to 45 seconds or less",
-            line=1,
-        )
 
     _check_typesetting(tree, config, issues)
     _check_safe_area(tree, config, issues)
 
-    all_issues = issues.issues
+    all_issues = sorted(issues.issues, key=lambda issue: issue.severity != "error")
     ok = not any(issue.severity == "error" for issue in all_issues)
     return LintReport(
         ok=ok,

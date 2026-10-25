@@ -185,16 +185,15 @@ def test_storyboard_project_mismatch(project) -> None:
 
 
 def test_storyboard_validation(project) -> None:
-    with pytest.raises(ValidationError):
-        Storyboard.model_validate(
-            {
-                "project_id": project.project_id,
-                "clips": [clip("scene_01")],
-                "total_seconds": 9,
-            }
-        )
-    with pytest.raises(ValidationError):
-        storyboard(project.project_id, [clip("scene_01", seconds=31)])
+    # Durations are deprecated inputs: totals that disagree are ignored.
+    board = Storyboard.model_validate(
+        {
+            "project_id": project.project_id,
+            "clips": [clip("scene_01")],
+            "total_seconds": 9,
+        }
+    )
+    assert board.clips[0].target_seconds == 10
     with pytest.raises(ValidationError):
         storyboard(project.project_id, [clip("scene_01"), clip("scene_01")])
     with pytest.raises(ValidationError):
@@ -203,7 +202,33 @@ def test_storyboard_validation(project) -> None:
         Storyboard.model_validate(
             {
                 "project_id": project.project_id,
-                "clips": [clip("scene_01")],
-                "total_seconds": 11,
+                "clips": [
+                    {
+                        "scene_id": "scene_01",
+                        "title": "No content",
+                        "key_objects": [],
+                    }
+                ],
             }
         )
+
+
+def test_storyboard_accepts_beats_without_durations(project) -> None:
+    board = Storyboard.model_validate(
+        {
+            "project_id": project.project_id,
+            "clips": [
+                {
+                    "scene_id": "scene_01",
+                    "title": "Beats only",
+                    "beats": [
+                        {"action": "draw the grid", "objects": ["grid"]},
+                        {"action": "apply A", "typst": "A = mat(1, 0.5; 0.2, 0.8)"},
+                    ],
+                }
+            ],
+        }
+    )
+    assert board.total_seconds is None
+    assert len(board.clips[0].beats) == 2
+    assert board.clips[0].target_seconds is None

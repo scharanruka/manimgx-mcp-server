@@ -176,18 +176,31 @@ class ProjectPaths(BaseModel):
     logs_dir: str
 
 
+class Beat(BaseModel):
+    """One animated beat: a single transition or a short sequence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(min_length=1)
+    objects: list[str] = Field(default_factory=list)
+    typst: str | None = None
+
+
 class ScenePlan(BaseModel):
-    """One clip in a storyboard."""
+    """One clip in a storyboard, described by beats rather than seconds."""
 
     model_config = ConfigDict(extra="forbid")
 
     scene_id: str
     title: str = Field(min_length=1)
-    target_seconds: float = Field(ge=1, le=30)
-    visual: str = Field(min_length=1)
-    key_objects: list[str]
-    animation_notes: str = Field(min_length=1)
+    beats: list[Beat] = Field(default_factory=list, max_length=12)
+    key_objects: list[str] = Field(default_factory=list)
     typst_expressions: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    # Deprecated: the clip's duration is whatever its beats produce.
+    target_seconds: float | None = None
+    visual: str | None = None
+    animation_notes: str | None = None
 
     @field_validator("scene_id")
     @classmethod
@@ -195,6 +208,12 @@ class ScenePlan(BaseModel):
         from paths import validate_scene_id
 
         return validate_scene_id(value)
+
+    @model_validator(mode="after")
+    def _require_content(self) -> ScenePlan:
+        if not self.beats and not (self.visual or self.animation_notes):
+            raise ValueError("a clip needs at least one beat")
+        return self
 
 
 class Storyboard(BaseModel):
@@ -204,19 +223,14 @@ class Storyboard(BaseModel):
 
     project_id: str
     clips: list[ScenePlan] = Field(min_length=1, max_length=100)
-    total_seconds: float = Field(ge=10, le=90)
+    # Deprecated: ignored. Duration is an output, never an input.
+    total_seconds: float | None = None
 
     @model_validator(mode="after")
     def _validate_clips(self) -> Storyboard:
         scene_ids = [clip.scene_id for clip in self.clips]
         if len(scene_ids) != len(set(scene_ids)):
             raise ValueError("scene_id values must be unique within a storyboard")
-        clip_total = sum(clip.target_seconds for clip in self.clips)
-        if abs(clip_total - self.total_seconds) > 0.05:
-            raise ValueError(
-                f"total_seconds ({self.total_seconds}) must match the sum of "
-                f"clip target_seconds ({clip_total})"
-            )
         return self
 
 
@@ -228,6 +242,7 @@ class SceneSummary(BaseModel):
     title: str
     status: str
     target_seconds: float | None = None
+    rendered_seconds: float | None = None
     code_hash: str | None = None
     code_lines: int | None = None
     rejection_reason: str | None = None
@@ -375,3 +390,72 @@ class ProjectSummary(BaseModel):
     status_counts: dict[str, int] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+
+
+class SceneBuildResult(BaseModel):
+    """One scene's outcome inside a project build."""
+
+    scene_id: str
+    ok: bool
+    changed: bool = False
+    seconds: float | None = None
+    status: str = ""
+    video_path: str | None = None
+    code_path: str | None = None
+    error: str | None = None
+    warnings: list[LintIssue] = Field(default_factory=list)
+
+
+class BuildResult(BaseModel):
+    """A built project: the video, the editable code, and the scene reports."""
+
+    ok: bool
+    project_id: str
+    mode: Literal["final", "preview"] = "final"
+    video_path: str | None = None
+    code_path: str | None = None
+    storyboard_path: str | None = None
+    report_path: str | None = None
+    bundle_dir: str | None = None
+    code: str | None = None
+    duration_seconds: float | None = None
+    width: int
+    height: int
+    fps: int
+    scenes: list[SceneBuildResult] = Field(default_factory=list)
+    issues: list[LintIssue] = Field(default_factory=list)
+    elapsed_seconds: float = 0.0
+    approval_required: bool = False
+
+
+class StartRequest(BaseModel):
+    """Parameters the server asks for when a start request omits both."""
+
+    aspect_ratio: Literal["9:16", "16:9"]
+    clip_count: int = Field(ge=1, le=12)
+
+
+class AspectChoice(BaseModel):
+    """The aspect ratio alone, when only that is missing."""
+
+    aspect_ratio: Literal["9:16", "16:9"]
+
+
+class ClipCountChoice(BaseModel):
+    """The clip count alone, when only that is missing."""
+
+    clip_count: int = Field(ge=1, le=12)
+
+
+class StartResult(BaseModel):
+    """Result of starting an animation project."""
+
+    status: Literal["started", "needs_input"]
+    brief: str
+    project: ProjectSummary | None = None
+    clip_count: int | None = None
+    missing: list[str] = Field(default_factory=list)
+    defaults: dict[str, Any] = Field(default_factory=dict)
+    question: str | None = None
+    plan_prompt: str | None = None
+    next: str | None = None
