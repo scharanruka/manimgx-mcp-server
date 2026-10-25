@@ -4,7 +4,7 @@ import importlib.metadata
 
 import manimgx as m
 
-from manimgx_mcp.server import mcp
+from server import mcp
 
 
 def test_manimgx_exposes_typst_scene_api() -> None:

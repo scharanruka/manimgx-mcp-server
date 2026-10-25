@@ -1,6 +1,7 @@
 # Agent build rules
 
 - Use `uv` for everything. Python 3.14. `uv sync` before running tests.
+- Keep Python modules flat under `src/`; do not add a package subdirectory.
 - Never install or import `manim`. Use `import manimgx as m`.
 - Never install LaTeX or the `typst` CLI. ManimGX includes Typst.
 - Use `m.Typst` and `m.MathTypst`. Do not emit `m.MathTex` or `m.Tex`.
@@ -15,4 +16,4 @@
 
 ## Current milestone
 
-Milestone 1 — scaffold and ManimGX smoke test. See `PLAN.md` for the full spec.
+Milestone 2 — SQLite persistence and project tools. See `PLAN.md` for the full spec.
