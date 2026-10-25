@@ -12,9 +12,11 @@ from typing import Any
 
 from config import PROJECT_STATUSES
 from models import (
+    InspectReport,
     LintReport,
     ProjectConfig,
     ProjectSummary,
+    RenderReport,
     SceneDetail,
     ScenePlan,
     SceneSummary,
@@ -388,6 +390,88 @@ def record_lint_result(project_id: str, scene_id: str, report: LintReport) -> Sc
         )
         row = _scene_row(connection, project_id, scene_id)
     return _scene_summary(row)
+
+
+def _record_scene_artifacts(
+    project_id: str,
+    scene_id: str,
+    *,
+    patch: dict[str, Any],
+    remove_keys: set[str] | None = None,
+    status: str | None,
+    event_type: str,
+    payload: dict[str, Any] | None,
+) -> SceneSummary:
+    now = utc_now()
+    with project_connection(project_id) as connection:
+        row = _scene_row(connection, project_id, scene_id)
+        artifacts = _parse_artifacts(row["artifacts_json"])
+        for key in remove_keys or set():
+            artifacts.pop(key, None)
+        artifacts.update(patch)
+        if status is None:
+            connection.execute(
+                """
+                UPDATE scenes SET artifacts_json = ?, updated_at = ?
+                WHERE project_id = ? AND scene_id = ?
+                """,
+                (json.dumps(artifacts), now, project_id, scene_id),
+            )
+        else:
+            connection.execute(
+                """
+                UPDATE scenes SET status = ?, artifacts_json = ?, updated_at = ?
+                WHERE project_id = ? AND scene_id = ?
+                """,
+                (status, json.dumps(artifacts), now, project_id, scene_id),
+            )
+        _insert_event(connection, project_id, scene_id, event_type, payload, now)
+        row = _scene_row(connection, project_id, scene_id)
+    return _scene_summary(row)
+
+
+def record_inspect_result(project_id: str, scene_id: str, report: InspectReport) -> SceneSummary:
+    """Store an inspect report and mark the scene inspected on success."""
+    return _record_scene_artifacts(
+        project_id,
+        scene_id,
+        patch={
+            "inspect": report.model_dump(mode="json"),
+            "inspect_storyboards": report.storyboard_paths,
+        },
+        status="inspected" if report.ok else None,
+        event_type="inspect_passed" if report.ok else "inspect_failed",
+        payload={
+            "ok": report.ok,
+            "exit_code": report.exit_code,
+            "issue_count": len(report.issues),
+        },
+    )
+
+
+def record_preview_result(project_id: str, scene_id: str, report: RenderReport) -> SceneSummary:
+    """Store a preview render report and mark the scene previewed on success."""
+    patch: dict[str, Any] = {"preview": report.model_dump(mode="json")}
+    remove_keys: set[str] | None = None
+    if report.ok:
+        patch["preview_video"] = report.video_path
+        patch["preview_storyboards"] = report.storyboard_paths
+    else:
+        remove_keys = {"preview_video", "preview_storyboards"}
+    return _record_scene_artifacts(
+        project_id,
+        scene_id,
+        patch=patch,
+        remove_keys=remove_keys,
+        status="preview_rendered" if report.ok else None,
+        event_type="preview_rendered" if report.ok else "preview_failed",
+        payload={
+            "ok": report.ok,
+            "exit_code": report.exit_code,
+            "video_path": report.video_path,
+            "duration_seconds": report.duration_seconds,
+        },
+    )
 
 
 def get_project_config(project_id: str) -> ProjectConfig:

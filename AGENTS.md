@@ -16,4 +16,4 @@
 
 ## Current milestone
 
-Milestone 3 — scene storage and deterministic linting. See `PLAN.md` for the full spec.
+Milestone 4 — inspect and preview rendering. See `PLAN.md` for the full spec.

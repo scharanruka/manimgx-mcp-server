@@ -413,6 +413,16 @@ def _check_safe_area(tree: ast.Module, config: ProjectConfig, issues: _IssueColl
                 _warn_position(0.0, value, config, node.lineno, issues)
 
 
+def find_scene_class_name(code: str) -> str | None:
+    """Return the single scene class name, or None if it is missing or ambiguous."""
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return None
+    classes = _scene_classes(tree)
+    return classes[0].name if len(classes) == 1 else None
+
+
 def lint_scene(code: str, config: ProjectConfig) -> LintReport:
     """Lint a ManimGX scene without executing it."""
     issues = _IssueCollector()

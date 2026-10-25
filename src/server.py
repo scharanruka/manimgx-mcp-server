@@ -14,12 +14,16 @@ from typing import Any, Literal
 from fastmcp import FastMCP
 
 import db
-from lint import lint_scene
+from inspection import run_inspect
+from lint import find_scene_class_name, lint_scene
 from models import (
+    InspectReport,
+    LayoutIssue,
     LintIssue,
     LintReport,
     ProjectConfig,
     ProjectSummary,
+    RenderReport,
     SceneDetail,
     SceneSummary,
     Storyboard,
@@ -33,6 +37,7 @@ from paths import (
     project_dir,
     scene_file,
 )
+from render import run_preview
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +185,69 @@ def scene_lint(project_id: str, scene_id: str) -> LintReport:
     report = lint_scene(detail.code, db.get_project_config(project_id))
     db.record_lint_result(project_id, scene_id, report)
     logger.info("lint %s for %s", "passed" if report.ok else "failed", scene_id)
+    return report
+
+
+def _inspect_failure(message: str, exit_code: int = 1) -> InspectReport:
+    return InspectReport(
+        ok=False,
+        exit_code=exit_code,
+        stdout="",
+        stderr=message,
+        issues=[LayoutIssue(message=message)],
+    )
+
+
+@mcp.tool
+def scene_inspect(
+    project_id: str,
+    scene_id: str,
+    times: list[float | Literal["end"]] | None = None,
+) -> InspectReport:
+    """Inspect layout at preview frames without rendering video."""
+    detail = db.get_scene_detail(project_id, scene_id)
+    if detail.code is None:
+        return _inspect_failure("scene has no code yet; call scene_write first")
+    class_name = find_scene_class_name(detail.code)
+    if class_name is None:
+        return _inspect_failure("scene must define exactly one class inheriting m.Scene")
+
+    try:
+        report = run_inspect(project_id, scene_id, class_name, times)
+    except ValueError as exc:
+        return _inspect_failure(str(exc))
+
+    db.record_inspect_result(project_id, scene_id, report)
+    logger.info("inspect %s for %s", "passed" if report.ok else "failed", scene_id)
+    return report
+
+
+def _render_failure(config: ProjectConfig, message: str, exit_code: int = 1) -> RenderReport:
+    return RenderReport(
+        ok=False,
+        exit_code=exit_code,
+        width=config.preview_width,
+        height=config.preview_height,
+        fps=config.preview_fps,
+        stdout="",
+        stderr=message,
+    )
+
+
+@mcp.tool
+def scene_render_preview(project_id: str, scene_id: str) -> RenderReport:
+    """Render a 480p preview and return its report."""
+    detail = db.get_scene_detail(project_id, scene_id)
+    config = db.get_project_config(project_id)
+    if detail.code is None:
+        return _render_failure(config, "scene has no code yet; call scene_write first")
+    class_name = find_scene_class_name(detail.code)
+    if class_name is None:
+        return _render_failure(config, "scene must define exactly one class inheriting m.Scene")
+
+    report = run_preview(project_id, scene_id, class_name, config)
+    db.record_preview_result(project_id, scene_id, report)
+    logger.info("preview %s for %s", "rendered" if report.ok else "failed", scene_id)
     return report
 
 

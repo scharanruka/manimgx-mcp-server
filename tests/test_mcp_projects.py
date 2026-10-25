@@ -32,6 +32,8 @@ async def test_project_tools_are_registered_and_callable(projects_home: Path) ->
         "scene_list",
         "scene_get",
         "scene_lint",
+        "scene_inspect",
+        "scene_render_preview",
     }
 
     async with Client(mcp) as client:
@@ -125,3 +127,21 @@ async def test_scene_tools_via_mcp(projects_home: Path) -> None:
         detail = _payload(fetched)
         assert detail["status"] == "lint_passed"
         assert detail["code"] == code
+
+        inspected = await client.call_tool(
+            "scene_inspect",
+            {"project_id": project_id, "scene_id": "scene_01", "times": [0.5, "end"]},
+        )
+        assert not inspected.is_error
+        assert _payload(inspected)["ok"] is True
+
+        previewed = await client.call_tool(
+            "scene_render_preview",
+            {"project_id": project_id, "scene_id": "scene_01"},
+        )
+        assert not previewed.is_error
+        preview = _payload(previewed)
+        assert preview["ok"] is True
+        assert preview["width"] == 480
+        assert preview["height"] == 854
+        assert preview["fps"] == 15

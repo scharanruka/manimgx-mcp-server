@@ -17,6 +17,8 @@ approves clips for final 1080p rendering.
   protection, and `project_create`, `project_get`, `project_update_theme`.
 - Milestone 3 complete: storyboard persistence, scene storage, and deterministic
   AST linting.
+- Milestone 4 complete: layout inspection and preview rendering at 480×854,
+  15 fps.
 
 ## Requirements
 
@@ -87,6 +89,18 @@ MCP client configuration for local development:
 The server speaks MCP over stdio. Logs go to stderr so stdout stays reserved for
 the protocol.
 
+### Connection test
+
+Run the stdio smoke client to start the server, list every tool, and create a
+temporary project:
+
+```bash
+uv run python scripts/check_connection.py
+```
+
+Expected output includes `Connection test passed.` The same path is covered by
+`tests/test_connection.py`.
+
 ## Projects
 
 Projects live under `MANIM_MCP_HOME` (default `~/.manimgx-mcp/projects`). Each
@@ -104,6 +118,8 @@ and traversal or symlink escapes are rejected.
 | `scene_list` | List scenes with status and code metadata. |
 | `scene_get` | Read one scene's plan, code, and artifacts. |
 | `scene_lint` | Run deterministic AST checks without executing code. |
+| `scene_inspect` | Check layout and generate storyboard frames without video. |
+| `scene_render_preview` | Render a 480p15 preview and return its report. |
 
 `project_update_theme` accepts only these keys:
 
@@ -134,7 +150,10 @@ Partial updates are merged; nested `font_sizes` and `safe_area` also merge.
 ```text
 storyboard_save → scene_write → scene_lint
                                    ├─ fail → edit code → scene_write
-                                   └─ pass → lint_passed
+                                   └─ pass → scene_inspect
+                                               ├─ fail → edit code → scene_write
+                                               └─ pass → scene_render_preview
+                                                           → preview_rendered
 ```
 
 `storyboard_save` requires 1–100 clips, each 1–30 seconds, with a total of 10–90
@@ -148,11 +167,20 @@ missing or multiple scene classes, invalid `construct` signatures, infinite
 typesetting in Typst projects, and missing Typst content. Safe-area coordinate
 problems are warnings rather than failures.
 
+`scene_inspect` runs ManimGX inspect in the project directory and writes
+annotated frames to `renders/storyboards/`. It returns the exit code, compact
+stdout/stderr, storyboard paths, and parsed layout problems.
+
+`scene_render_preview` uses the project's preview settings (480×854, 15 fps,
+`ultrafast`, CRF 30 by default) and writes
+`renders/preview/<scene_id>.mp4`.
+
 ## Project layout
 
 ```text
 src/                 server, config, models, paths, and database modules
 examples/scenes/     example ManimGX scenes
+scripts/             local connection smoke client
 tests/               test suite
 PLAN.md              build specification and milestones
 ```

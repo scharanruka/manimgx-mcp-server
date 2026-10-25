@@ -263,6 +263,42 @@ class LintReport(BaseModel):
     class_name: str | None = None
 
 
+class LayoutIssue(BaseModel):
+    """One layout problem or note reported by ManimGX inspect."""
+
+    number: int | None = None
+    message: str
+    line: int | None = Field(default=None, ge=1)
+    note: bool = False
+
+
+class InspectReport(BaseModel):
+    """Result of running ManimGX inspect without rendering video."""
+
+    ok: bool
+    exit_code: int
+    stdout: str
+    stderr: str
+    storyboard_paths: list[str] = Field(default_factory=list)
+    issues: list[LayoutIssue] = Field(default_factory=list)
+    duration_seconds: float | None = None
+
+
+class RenderReport(BaseModel):
+    """Result of rendering preview or final video."""
+
+    ok: bool
+    exit_code: int
+    video_path: str | None = None
+    duration_seconds: float | None = None
+    width: int
+    height: int
+    fps: int
+    storyboard_paths: list[str] = Field(default_factory=list)
+    stdout: str
+    stderr: str
+
+
 class ProjectSummary(BaseModel):
     """Project config, paths, storyboard, scenes, and status counts."""
 

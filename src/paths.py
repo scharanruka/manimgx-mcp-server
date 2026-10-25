@@ -151,10 +151,11 @@ def _artifact_values(value: object) -> list[str]:
     if isinstance(value, str):
         return [value]
     if isinstance(value, dict):
+        skip = {"lint", "inspect", "preview", "final"}
         return [
             item
             for key, nested in value.items()
-            if key != "lint"
+            if key not in skip
             for item in _artifact_values(nested)
         ]
     if isinstance(value, (list, tuple, set)):

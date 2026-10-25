@@ -36,6 +36,10 @@ X264_PRESETS: Final = (
 ASPECT_RATIOS: Final = ("9:16", "16:9")
 MATH_SYNTAXES: Final = ("typst", "latex")
 
+RENDER_TIMEOUT_SECONDS: Final = 120
+INSPECT_STDOUT_TAIL: Final = 4096
+RENDER_STDOUT_TAIL: Final = 2048
+
 ASPECT_DEFAULTS: Final[dict[str, dict[str, Any]]] = {
     "9:16": {
         "final_width": 1080,
