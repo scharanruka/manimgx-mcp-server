@@ -229,7 +229,15 @@ def scene_inspect(
         return _inspect_failure("scene must define exactly one class inheriting m.Scene")
 
     try:
-        report = run_inspect(project_id, scene_id, class_name, times)
+        config = db.get_project_config(project_id)
+        report = run_inspect(
+            project_id,
+            scene_id,
+            class_name,
+            times,
+            width=config.preview_width,
+            height=config.preview_height,
+        )
     except ValueError as exc:
         return _inspect_failure(str(exc))
 
@@ -564,11 +572,15 @@ def project_stitch(
             error=f"final video missing for: {', '.join(missing)}",
         )
 
+    config = db.get_project_config(project_id)
     report = post.stitch(
         videos,
         ids,
         output,
         Path(project_paths(project_id).logs_dir),
+        preset=config.final_preset,
+        crf=config.final_crf,
+        fps=config.final_fps,
     )
     if report.ok:
         db.record_event(

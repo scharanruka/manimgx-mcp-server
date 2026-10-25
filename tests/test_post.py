@@ -212,3 +212,32 @@ def test_open_mpv_missing(projects_home: Path, monkeypatch: pytest.MonkeyPatch) 
 
     assert not report.ok
     assert "mpv is not installed" in report.error
+
+
+HOLD_CODE = """import manimgx as m
+
+
+class Scene01(m.Scene):
+    def construct(self) -> None:
+        text = m.Typst("Hold")
+        self.play(m.Write(text), run_time=0.2)
+        self.wait(1.5)
+"""
+
+
+@pytest.mark.gpu
+def test_stitch_keeps_trailing_hold(projects_home: Path) -> None:
+    """A still hold is one long-duration frame; concat must not truncate it."""
+    project = make_project("Trailing Hold", 2)
+    per_clip: list[float] = []
+    for index in (1, 2):
+        scene_id = f"scene_{index:02d}"
+        scene_write(project.project_id, scene_id, HOLD_CODE)
+        rendered = scene_render_final(project.project_id, scene_id, force=True)
+        assert rendered.ok
+        per_clip.append(rendered.duration_seconds or 0.0)
+
+    report = project_stitch(project.project_id, "hold")
+
+    assert report.ok
+    assert report.duration_seconds == pytest.approx(sum(per_clip), abs=0.2)
