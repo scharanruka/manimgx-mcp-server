@@ -151,6 +151,8 @@ def stitch(
         "yuv420p",
         "-fps_mode",
         "cfr",
+        "-c:a",
+        "aac",
     ]
     if frame_rate is not None:
         command.extend(["-r", str(frame_rate)])
