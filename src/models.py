@@ -299,6 +299,34 @@ class RenderReport(BaseModel):
     stderr: str
 
 
+class BatchSceneResult(BaseModel):
+    """One scene's result inside a batch render."""
+
+    scene_id: str
+    ok: bool
+    duration_seconds: float | None = None
+    video_path: str | None = None
+    elapsed_seconds: float = 0.0
+    error: str | None = None
+
+
+class BatchReport(BaseModel):
+    """Result of one batch worker process rendering many scenes."""
+
+    ok: bool
+    mode: Literal["preview", "final"]
+    scene_count: int
+    total_seconds: float = 0.0
+    elapsed_seconds: float = 0.0
+    budget_seconds: float
+    within_budget: bool
+    results: list[BatchSceneResult] = Field(default_factory=list)
+    job_path: str = ""
+    result_path: str = ""
+    stdout: str = ""
+    stderr: str = ""
+
+
 class ProjectSummary(BaseModel):
     """Project config, paths, storyboard, scenes, and status counts."""
 

@@ -16,4 +16,4 @@
 
 ## Current milestone
 
-Milestone 4 — inspect and preview rendering. See `PLAN.md` for the full spec.
+Milestone 5 — batch rendering and final output. See `PLAN.md` for the full spec.

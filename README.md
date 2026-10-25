@@ -19,6 +19,8 @@ approves clips for final 1080p rendering.
   AST linting.
 - Milestone 4 complete: layout inspection and preview rendering at 480×854,
   15 fps.
+- Milestone 5 complete: single-process batch preview rendering and final
+  1080×1920, 60 fps output.
 
 ## Requirements
 
@@ -120,6 +122,8 @@ and traversal or symlink escapes are rejected.
 | `scene_lint` | Run deterministic AST checks without executing code. |
 | `scene_inspect` | Check layout and generate storyboard frames without video. |
 | `scene_render_preview` | Render a 480p15 preview and return its report. |
+| `project_render_batch` | Render many preview or final clips in one worker. |
+| `scene_render_final` | Render a 1080p60 final; requires approval or `force`. |
 
 `project_update_theme` accepts only these keys:
 
@@ -174,6 +178,24 @@ stdout/stderr, storyboard paths, and parsed layout problems.
 `scene_render_preview` uses the project's preview settings (480×854, 15 fps,
 `ultrafast`, CRF 30 by default) and writes
 `renders/preview/<scene_id>.mp4`.
+
+`project_render_batch` renders every requested clip in **one** `batch_worker.py`
+subprocess: ManimGX is imported once and the GPU is initialized once, then each
+scene is rendered sequentially. Preview batches write to `renders/preview/`,
+final batches to `renders/final/`. Final rendering requires scenes to be
+approved unless `scene_render_final(..., force=True)` is used.
+
+Measured benchmark on the development machine:
+
+```text
+20 preview clips, 6.66s of video, 0.76s wall, budget 60s
+```
+
+Run the benchmark directly with:
+
+```bash
+uv run pytest tests/bench_batch.py -q -s
+```
 
 ## Project layout
 

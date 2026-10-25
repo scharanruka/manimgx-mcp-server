@@ -34,6 +34,8 @@ async def test_project_tools_are_registered_and_callable(projects_home: Path) ->
         "scene_lint",
         "scene_inspect",
         "scene_render_preview",
+        "project_render_batch",
+        "scene_render_final",
     }
 
     async with Client(mcp) as client:
@@ -145,3 +147,20 @@ async def test_scene_tools_via_mcp(projects_home: Path) -> None:
         assert preview["width"] == 480
         assert preview["height"] == 854
         assert preview["fps"] == 15
+
+        batched = await client.call_tool(
+            "project_render_batch",
+            {"project_id": project_id, "scene_ids": ["scene_01"]},
+        )
+        assert not batched.is_error
+        assert _payload(batched)["ok"] is True
+
+        final = await client.call_tool(
+            "scene_render_final",
+            {"project_id": project_id, "scene_id": "scene_01", "force": True},
+        )
+        assert not final.is_error
+        assert _payload(final)["ok"] is True
+        assert _payload(final)["width"] == 1080
+        assert _payload(final)["height"] == 1920
+        assert _payload(final)["fps"] == 60

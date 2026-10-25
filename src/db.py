@@ -12,6 +12,7 @@ from typing import Any
 
 from config import PROJECT_STATUSES
 from models import (
+    BatchSceneResult,
     InspectReport,
     LintReport,
     ProjectConfig,
@@ -470,6 +471,73 @@ def record_preview_result(project_id: str, scene_id: str, report: RenderReport) 
             "exit_code": report.exit_code,
             "video_path": report.video_path,
             "duration_seconds": report.duration_seconds,
+        },
+    )
+
+
+def record_final_result(project_id: str, scene_id: str, report: RenderReport) -> SceneSummary:
+    """Store a final render report and mark the scene final-rendered on success."""
+    patch: dict[str, Any] = {"final": report.model_dump(mode="json")}
+    remove_keys: set[str] | None = None
+    if report.ok:
+        patch["final_video"] = report.video_path
+        patch["final_storyboards"] = report.storyboard_paths
+    else:
+        remove_keys = {"final_video", "final_storyboards"}
+    return _record_scene_artifacts(
+        project_id,
+        scene_id,
+        patch=patch,
+        remove_keys=remove_keys,
+        status="final_rendered" if report.ok else None,
+        event_type="final_rendered" if report.ok else "final_failed",
+        payload={
+            "ok": report.ok,
+            "exit_code": report.exit_code,
+            "video_path": report.video_path,
+            "duration_seconds": report.duration_seconds,
+        },
+    )
+
+
+def record_batch_scene_result(
+    project_id: str,
+    scene_id: str,
+    mode: str,
+    result: BatchSceneResult,
+) -> SceneSummary:
+    """Record one successful batch scene without disturbing prior artifacts on failure."""
+    if mode not in {"preview", "final"}:
+        raise ValueError(f"unknown batch mode: {mode}")
+    if not result.ok:
+        return get_scene_summary(project_id, scene_id)
+
+    if mode == "preview":
+        patch = {
+            "preview_batch": result.model_dump(mode="json"),
+            "preview_video": result.video_path,
+        }
+        status = "preview_rendered"
+        event_type = "preview_rendered"
+    else:
+        patch = {
+            "final_batch": result.model_dump(mode="json"),
+            "final_video": result.video_path,
+        }
+        status = "final_rendered"
+        event_type = "final_rendered"
+
+    return _record_scene_artifacts(
+        project_id,
+        scene_id,
+        patch=patch,
+        status=status,
+        event_type=event_type,
+        payload={
+            "ok": result.ok,
+            "duration_seconds": result.duration_seconds,
+            "video_path": result.video_path,
+            "batch": True,
         },
     )
 

@@ -34,6 +34,7 @@ sources = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+python_files = ["test_*.py", "bench_*.py"]
 asyncio_mode = "auto"
 markers = [
     "slow: long-running tests",
